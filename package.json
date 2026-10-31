@@ -1,6 +1,6 @@
 {
   "name": "3dx-remote-play",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Play 3DXChat on your phone, from anywhere.",
   "private": true,
   "type": "module",
@@ -22,6 +22,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "~2.12.4",
     "@types/node": "^22.19.19",
+    "jsdom": "^26.1.0",
     "typescript": "^5.9.3",
     "vite": "^6.4.3",
     "vitest": "^3.2.6"

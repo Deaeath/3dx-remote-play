@@ -1,4 +1,6 @@
-The first release of 3DX Remote Play: play 3DXChat on your phone, from anywhere.
+Fixes the **Allow Remote Play** switch, which flipped straight back off in 1.0.0, so no pairing code appeared.
+
+3DX Remote Play plays 3DXChat on your phone, from anywhere:
 
 - Scan a code once, then open the page you saved, on Wi-Fi or mobile data. Nothing to install on the phone.
 - Touch controls made for 3DX: tap to walk and click, drag to turn the camera, pinch to zoom, chat with your phone's keyboard.

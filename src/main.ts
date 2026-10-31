@@ -41,6 +41,8 @@ const autostartToggle = element<HTMLInputElement>("autostart");
 let snapshot: HostSnapshot = { pairing: null, relay: "off", session: null };
 let busy = false;
 let codeShown = false;
+/** Where the user just put the switch, until the host has caught up. */
+let wantedEnabled: boolean | null = null;
 let forgetArmed: ReturnType<typeof setTimeout> | null = null;
 let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -70,7 +72,7 @@ function render(): void {
   const link = pairingLink(pairing);
   if (!link) codeShown = false;
 
-  enabledToggle.checked = enabled;
+  enabledToggle.checked = wantedEnabled ?? enabled;
   enabledToggle.disabled = busy;
   statusRow.hidden = !enabled;
   status.textContent = RELAY_LABELS[snapshot.relay];
@@ -122,7 +124,19 @@ function disarmForget(): void {
   forgetButton.textContent = "Forget this phone";
 }
 
-enabledToggle.addEventListener("change", () => void whileBusy(() => host.setEnabled(enabledToggle.checked)));
+// Read the switch before anything redraws it: a redraw puts it back to the
+// host's state, which is still the old one.
+enabledToggle.addEventListener("change", () => {
+  const wanted = enabledToggle.checked;
+  wantedEnabled = wanted;
+  void whileBusy(async () => {
+    try {
+      await host.setEnabled(wanted);
+    } finally {
+      wantedEnabled = null;
+    }
+  });
+});
 endButton.addEventListener("click", () => host.endSession());
 newLink.addEventListener("click", () => void whileBusy(() => host.newLink()));
 
