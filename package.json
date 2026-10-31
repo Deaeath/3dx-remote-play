@@ -1,6 +1,6 @@
 {
   "name": "3dx-remote-play",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Play 3DXChat on your phone, from anywhere.",
   "private": true,
   "type": "module",

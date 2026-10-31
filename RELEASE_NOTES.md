@@ -1,4 +1,4 @@
-Fixes the **Allow Remote Play** switch, which flipped straight back off in 1.0.0, so no pairing code appeared.
+Smoother controls: the game's sound now travels in fewer, larger pieces, so your touches reach the game without waiting behind it.
 
 3DX Remote Play plays 3DXChat on your phone, from anywhere:
 

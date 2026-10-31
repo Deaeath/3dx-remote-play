@@ -51,9 +51,12 @@ const GAME_PATH_FILE: &str = "remote_play_game.txt";
 /// The launcher starts the game with this.
 const GAME_START_ARG: &str = "-start";
 
-/// 20 ms of 48 kHz stereo float, matching `AudioData` in remotePlayHost.ts.
+/// 100 ms of 48 kHz stereo float, matching `AudioData` in src/host.ts. Each
+/// chunk is one trip through the app's message channel, which the phone's
+/// controls share: 20 ms chunks (50 a second) slowed every message to
+/// hundreds of milliseconds.
 #[cfg(windows)]
-const AUDIO_CHUNK_BYTES: usize = 960 * 2 * 4;
+const AUDIO_CHUNK_BYTES: usize = 4800 * 2 * 4;
 
 struct RenamedWindow {
     handle: isize,
