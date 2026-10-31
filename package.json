@@ -1,0 +1,29 @@
+{
+  "name": "3dx-remote-play",
+  "version": "1.0.0",
+  "description": "Play 3DXChat on your phone, from anywhere.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "tauri": "tauri",
+    "build:phone": "vite build --config phone/vite.config.ts",
+    "deploy:phone": "npm run build:phone && cd phone/relay && npx wrangler deploy && cd .. && npx wrangler pages deploy dist --project-name 3dx-play --branch main"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "~2.12.4",
+    "@tauri-apps/plugin-autostart": "~2.7.0",
+    "@tauri-apps/plugin-notification": "~2.8.0",
+    "qrcode-generator": "^2.0.4"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "~2.12.4",
+    "@types/node": "^22.19.19",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3",
+    "vitest": "^3.2.6"
+  }
+}

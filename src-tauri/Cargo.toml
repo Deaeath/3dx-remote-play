@@ -1,0 +1,44 @@
+[package]
+name = "three-dx-remote-play"
+version = "1.0.0"
+description = "Play 3DXChat on your phone, from anywhere."
+authors = ["Deaeath"]
+license = "MIT"
+repository = "https://github.com/Deaeath/3dx-remote-play"
+edition = "2021"
+
+[lib]
+name = "remote_play_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# Pinned to the minor version of the matching @tauri-apps packages in
+# package.json: `tauri build` refuses a mismatch.
+[dependencies]
+tauri = { version = "~2.12", features = ["tray-icon"] }
+tauri-plugin-autostart = "~2.7"
+tauri-plugin-notification = "~2.8"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Security_Cryptography",
+  "Win32_System_Power",
+  "Win32_System_StationsAndDesktops",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+# Game-only sound: Windows' per-process loopback.
+wasapi = "0.19"
+
+[dev-dependencies]
+tempfile = "3"

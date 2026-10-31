@@ -1,0 +1,85 @@
+name: Build
+
+# Every push to main and every pull request builds the installer. A version
+# tag (v1.2.3) also publishes it as a release.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build the app and installer
+        run: npm run tauri build
+
+      - name: Keep the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3DX-Remote-Play-installer
+          if-no-files-found: error
+          path: src-tauri/target/release/bundle/nsis/*.exe
+
+      # After the upload, so a test failure still leaves the installer to look
+      # at. The run (and any release) fails either way.
+      - name: Test the native side
+        shell: pwsh
+        run: |
+          # The app exe gets the Common Controls 6 manifest from tauri-build, but
+          # Cargo gives test binaries none, and Windows then won't load anything
+          # that uses TaskDialogIndirect (STATUS_ENTRYPOINT_NOT_FOUND). So the
+          # unit tests are linked with that manifest and run directly.
+          $manifest = Join-Path $env:RUNNER_TEMP 'tests.manifest'
+          @'
+          <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+            <dependency>
+              <dependentAssembly>
+                <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*" />
+              </dependentAssembly>
+            </dependency>
+          </assembly>
+          '@ | Set-Content -Path $manifest -Encoding utf8
+          $messages = cargo rustc --manifest-path src-tauri/Cargo.toml --lib --profile test --message-format=json-render-diagnostics -- -C link-arg=/MANIFEST:EMBED -C "link-arg=/MANIFESTINPUT:$manifest"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tests = $messages | ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'remote_play_lib' -and $_.executable } |
+            Select-Object -Last 1 -ExpandProperty executable
+          if (-not $tests) { throw 'no unit test binary was built' }
+          Set-Location src-tauri
+          & $tests
+          exit $LASTEXITCODE
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          gh release create $env:GITHUB_REF_NAME $installer.FullName --title "3DX Remote Play $($env:GITHUB_REF_NAME.TrimStart('v'))" --notes-file RELEASE_NOTES.md

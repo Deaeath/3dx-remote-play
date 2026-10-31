@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>3DX Remote Play</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#0b0b12" />
+    <!-- Home-screen launch keeps the page's own URL. A web manifest would replace
+         it with a fixed start_url and lose a link that hasn't been used yet. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="3DX Play" />
+    <link rel="apple-touch-icon" href="/icon.png" />
+    <link rel="icon" href="/icon.png" />
+    <link rel="stylesheet" href="/play.css" />
+    <script type="module" src="/main.ts"></script>
+  </head>
+  <body>
+    <video id="picture" playsinline webkit-playsinline autoplay></video>
+    <div id="surface" aria-label="Game view: tap to walk or click, drag to turn the camera, pinch to zoom"></div>
+
+    <nav id="actions" aria-label="Game controls">
+      <button type="button" id="chat-button" class="action chat" aria-label="Chat">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" /></svg>
+      </button>
+      <button type="button" id="camera-button" class="action camera" aria-label="Change camera">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg>
+      </button>
+      <button type="button" id="menu-button" class="action menu" aria-label="Game menu">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+      </button>
+      <button type="button" id="zoom-button" class="action zoom" aria-label="Magnifier" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6" /><path d="M15 15l5 5M10.5 8v5M8 10.5h5" /></svg>
+      </button>
+      <button type="button" id="sound-button" class="action sound" aria-label="Sound" aria-pressed="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.5L12 19V5L7.5 9.5z" /><path id="sound-waves" d="M15.5 9a4.5 4.5 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11" /></svg>
+      </button>
+      <button type="button" id="end-button" class="action end" aria-label="End session">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v8M7 7a7.5 7.5 0 1 0 10 0" /></svg>
+      </button>
+    </nav>
+
+    <div id="badge" role="status"></div>
+
+    <form id="chat" hidden>
+      <input id="chat-input" type="text" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" placeholder="Message" aria-label="Message" />
+      <button type="submit" aria-label="Send">Send</button>
+    </form>
+
+    <section id="panel">
+      <img src="/icon.png" alt="" width="72" height="72" />
+      <h1 id="panel-title">3DX Remote Play</h1>
+      <p id="panel-text"></p>
+      <button type="button" id="panel-action" hidden></button>
+      <a id="panel-link" hidden href="https://github.com/Deaeath/3dx-remote-play/releases/latest">Get 3DX Remote Play for Windows</a>
+    </section>
+
+    <div id="rotate" aria-hidden="true">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="2" /><path d="M3 12a9 9 0 0 1 6-8M9 2v4H5" /></svg>
+      <p>Turn your phone sideways</p>
+    </div>
+  </body>
+</html>

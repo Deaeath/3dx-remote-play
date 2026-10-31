@@ -1,0 +1,8 @@
+name = "3dx-play"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-10-01"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+script_name = "play-3dx-relay"

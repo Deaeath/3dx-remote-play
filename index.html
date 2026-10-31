@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>3DX Remote Play</title>
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <main class="app">
+      <header class="brand">
+        <img src="/icon.png" alt="" width="44" height="44" />
+        <div>
+          <h1>3DX Remote Play</h1>
+          <p class="by">By KingColossus</p>
+        </div>
+      </header>
+
+      <section>
+        <div class="card">
+          <label class="row">
+            <span>Allow Remote Play</span>
+            <input type="checkbox" id="enabled" class="switch" role="switch" />
+          </label>
+          <div class="row" id="status-row" hidden>
+            <span>This PC</span>
+            <span id="status" class="value"></span>
+          </div>
+        </div>
+        <p class="note">Play 3DXChat on your phone from anywhere. Your phone only ever sees and controls the game, nothing else on this PC. While this is on, the PC stays awake.</p>
+      </section>
+
+      <section id="session" hidden>
+        <h2>Connected</h2>
+        <div class="card">
+          <div class="row">
+            <span id="session-name"></span>
+            <span id="session-state" class="value"></span>
+          </div>
+          <button type="button" id="end" class="row action danger">End session</button>
+        </div>
+      </section>
+
+      <section id="pair" hidden>
+        <h2>Pair your phone</h2>
+        <div class="card">
+          <div id="qr" class="qr" hidden></div>
+          <button type="button" id="show-code" class="row action">Show pairing code</button>
+          <button type="button" id="copy-link" class="row action" hidden>Copy link</button>
+          <button type="button" id="hide-code" class="row action" hidden>Hide code</button>
+          <button type="button" id="new-link" class="row action" hidden>Make a new link</button>
+        </div>
+        <p class="note" id="pair-note"></p>
+      </section>
+
+      <section id="paired" hidden>
+        <h2>Your phone</h2>
+        <div class="card">
+          <div class="row">
+            <span id="phone-name"></span>
+            <span class="value">Paired</span>
+          </div>
+          <button type="button" id="forget" class="row action danger">Forget this phone</button>
+        </div>
+        <p class="note">Only this phone can connect. Open the page you saved on it, from anywhere.</p>
+      </section>
+
+      <section id="startup" hidden>
+        <div class="card">
+          <label class="row">
+            <span>Open with Windows</span>
+            <input type="checkbox" id="autostart" class="switch" role="switch" />
+          </label>
+        </div>
+        <p class="note">Leave 3DXChat open and Windows unlocked, or start the game from your phone. Closing this window keeps Remote Play running in the tray.</p>
+      </section>
+    </main>
+  </body>
+</html>

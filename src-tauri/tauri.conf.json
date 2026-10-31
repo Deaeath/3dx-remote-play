@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "3DX Remote Play",
+  "mainBinaryName": "3dx-remote-play",
+  "version": "1.0.0",
+  "identifier": "com.kingcolossus.remoteplay",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "3DX Remote Play",
+        "width": 420,
+        "height": 800,
+        "resizable": false,
+        "maximizable": false,
+        "center": true,
+        "visible": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --auto-select-desktop-capture-source=3dx-remote-play-capture"
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self'",
+        "img-src": "'self' data:",
+        "media-src": "'self' blob:",
+        "connect-src": "'self' ipc: http://ipc.localhost https://3dx-play.pages.dev wss://3dx-play.pages.dev",
+        "object-src": "'none'",
+        "base-uri": "'self'"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "publisher": "Deaeath",
+    "copyright": "Copyright (c) 2026 Deaeath",
+    "category": "Game",
+    "shortDescription": "Play 3DXChat on your phone, from anywhere.",
+    "longDescription": "Turn your phone into the screen and controls for 3DXChat running on your PC, from any network. Only the game window and the game's sound are shared, encrypted, with the one phone you paired.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}
