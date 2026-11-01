@@ -2,6 +2,7 @@ A clearer name, and the game keeps the focus:
 
 - The bar Windows shows while the game is shared now names `remote-play.3dx`.
 - Starting in the tray no longer takes the focus away from the game.
+- Chat from your phone now types into whichever chat box is active in the game, so tap the one you want first.
 
 3DX Remote Play plays 3DXChat on your phone, from anywhere:
 

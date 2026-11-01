@@ -370,7 +370,7 @@ mod win {
     use windows_sys::Win32::System::StationsAndDesktops::{CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, DESKTOP_READOBJECTS, UOI_NAME};
     use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+        MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE,
         MAPVK_VK_TO_VSC, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
         MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, VK_MENU,
     };
@@ -446,7 +446,8 @@ mod win {
             Action::Wheel { delta } => out.push(mouse(0, 0, delta, MOUSEEVENTF_WHEEL)),
             Action::Key { code, down } => {
                 let scan = unsafe { MapVirtualKeyW(u32::from(code), MAPVK_VK_TO_VSC) } as u16;
-                out.push(keyboard(code, scan, if down { 0 } else { KEYEVENTF_KEYUP }));
+                // The scan code alone, as a real keyboard sends it: some games ignore a key name.
+                out.push(keyboard(0, scan, if down { KEYEVENTF_SCANCODE } else { KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP }));
             }
             Action::Char { unit } => {
                 out.push(keyboard(0, unit, KEYEVENTF_UNICODE));

@@ -13,8 +13,6 @@ const WHEEL_NOTCH: i32 = 120;
 const KEY_HOLD_MS: u64 = 60;
 const CLICK_SETTLE_MS: u64 = 30;
 const CLICK_HOLD_MS: u64 = 50;
-/// The chat box needs a moment to take the focus after Enter opens it.
-const CHAT_OPEN_MS: u64 = 150;
 const ENTER: u16 = 0x0D;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -110,16 +108,14 @@ fn tap_key(code: u16) -> [Action; 3] {
     [Action::Key { code, down: true }, Action::Wait { ms: KEY_HOLD_MS }, Action::Key { code, down: false }]
 }
 
-/// Enter opens the chat box, the text goes in, Enter sends it. One sequence, so
-/// the text can't arrive before the box is open. Nothing to say means no keys.
+/// The text goes into whichever box is active in the game, and Enter sends it.
+/// Nothing to say means no keys.
 fn chat_actions(text: &str) -> Vec<Action> {
     let units = text_units(text);
     if units.is_empty() {
         return Vec::new();
     }
-    let mut actions = tap_key(ENTER).to_vec();
-    actions.push(Action::Wait { ms: CHAT_OPEN_MS });
-    actions.extend(units.into_iter().map(|unit| Action::Char { unit }));
+    let mut actions: Vec<Action> = units.into_iter().map(|unit| Action::Char { unit }).collect();
     actions.push(Action::Wait { ms: KEY_HOLD_MS });
     actions.extend(tap_key(ENTER));
     actions
@@ -248,14 +244,12 @@ mod tests {
     }
 
     #[test]
-    fn chat_opens_the_box_then_types_then_sends() {
+    fn chat_types_into_the_active_box_then_sends() {
         let actions = actions_for(&input(r#"{"t":"chat","text":"hi"}"#)).unwrap();
         let keys: Vec<&Action> = actions.iter().filter(|action| matches!(action, Action::Key { .. })).collect();
-        assert_eq!(keys.len(), 4, "Enter down and up, twice");
-        let first_char = actions.iter().position(|action| matches!(action, Action::Char { .. })).unwrap();
-        let second_enter = actions.iter().rposition(|action| matches!(action, Action::Key { down: true, .. })).unwrap();
-        assert!(matches!(actions[first_char - 1], Action::Wait { ms } if ms >= CHAT_OPEN_MS), "the box gets time to open");
-        assert!(first_char < second_enter, "the text goes in before it's sent");
+        assert_eq!(keys.len(), 2, "Enter down and up, once");
+        assert_eq!(actions[0], Action::Char { unit: u16::from(b'h') }, "the text comes first");
+        assert!(matches!(actions.last(), Some(Action::Key { code: ENTER, down: false })), "Enter comes last");
     }
 
     #[test]
