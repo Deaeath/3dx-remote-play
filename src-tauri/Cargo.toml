@@ -1,6 +1,6 @@
 [package]
 name = "three-dx-remote-play"
-version = "1.0.7"
+version = "1.0.8"
 description = "Play 3DXChat on your phone, from anywhere."
 authors = ["Deaeath"]
 license = "MIT"

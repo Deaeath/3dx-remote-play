@@ -44,6 +44,8 @@ const CAPTURE_TITLE_LIMIT: Duration = Duration::from_secs(6);
 /// retried this often, for five minutes.
 const TITLE_RESTORE_PAUSE: Duration = Duration::from_secs(1);
 const TITLE_RESTORE_TRIES: u32 = 300;
+/// The picker closes as the capture starts, but its last thumbnails can trail it.
+const PICKER_GONE_AFTER: Duration = Duration::from_secs(5);
 
 const PAIRING_FILE: &str = "remote_play.pairing";
 const MAX_PAIRING_LEN: usize = 8192;
@@ -78,6 +80,9 @@ pub struct RemotePlayState {
     renames: AtomicU64,
     audio_stop: Mutex<Option<Arc<AtomicBool>>>,
     game_path: Mutex<Option<String>>,
+    /// The app's own windows, untitled while the capture picker is open.
+    untitled: Arc<Mutex<Vec<(isize, String)>>>,
+    untitles: Arc<AtomicU64>,
 }
 
 impl RemotePlayState {
@@ -262,6 +267,30 @@ fn restore_title(renamed: &Mutex<Option<RenamedWindow>>, generation: Option<u64>
     false
 }
 
+/// Before the picker opens: see `win::untitle_own_windows`.
+fn hide_from_picker(state: &RemotePlayState) {
+    state.untitles.fetch_add(1, Ordering::Relaxed);
+    let untitled = win::untitle_own_windows();
+    if let Ok(mut kept) = state.untitled.lock() {
+        kept.extend(untitled);
+    }
+}
+
+/// Once the picker has surely gone. A capture started since keeps them untitled.
+fn show_to_picker_later(state: &RemotePlayState) {
+    let generation = state.untitles.load(Ordering::Relaxed);
+    let untitled = Arc::clone(&state.untitled);
+    let untitles = Arc::clone(&state.untitles);
+    thread::spawn(move || {
+        thread::sleep(PICKER_GONE_AFTER);
+        if untitles.load(Ordering::Relaxed) != generation {
+            return;
+        }
+        let windows = untitled.lock().map(|mut kept| std::mem::take(&mut *kept)).unwrap_or_default();
+        win::retitle(&windows);
+    });
+}
+
 /// Makes the game the one window capture will pick, and returns its handle for
 /// the page to check the capture against.
 fn begin_capture(state: &RemotePlayState) -> Result<String, String> {
@@ -270,6 +299,7 @@ fn begin_capture(state: &RemotePlayState) -> Result<String, String> {
         return Err("3DXChat isn't responding".to_string());
     }
     restore_title(&state.renamed, None);
+    hide_from_picker(state);
     let title = Some(game_window::title(game.handle)).filter(|title| title != CAPTURE_TITLE).unwrap_or_else(|| GAME_TITLE.to_string());
     let generation = state.renames.fetch_add(1, Ordering::Relaxed) + 1;
     if let Ok(mut slot) = state.renamed.lock() {
@@ -298,13 +328,24 @@ fn begin_capture(state: &RemotePlayState) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn remote_play_capture_begin(app: AppHandle) -> Result<String, String> {
-    off_main_thread(move || begin_capture(&app.state::<RemotePlayState>())).await?
+    off_main_thread(move || {
+        let state = app.state::<RemotePlayState>();
+        let begun = begin_capture(&state);
+        // It may have untitled the app's windows before failing.
+        if begun.is_err() {
+            show_to_picker_later(&state);
+        }
+        begun
+    })
+    .await?
 }
 
 #[tauri::command]
 pub async fn remote_play_capture_end(app: AppHandle) -> Result<(), String> {
     off_main_thread(move || {
-        restore_title(&app.state::<RemotePlayState>().renamed, None);
+        let state = app.state::<RemotePlayState>();
+        restore_title(&state.renamed, None);
+        show_to_picker_later(&state);
     })
     .await
 }
@@ -547,6 +588,70 @@ mod win {
         }
     }
 
+    /// Every capture opens the browser engine's picker, which lists each visible,
+    /// titled top-level window and takes thumbnails of it. One of ours holds the
+    /// browser's own window, so a thumbnail of it waits on the browser while the
+    /// browser waits on the thumbnail, and everything freezes. The picker skips
+    /// untitled windows, so ours go untitled until it has gone. The single-instance
+    /// window is only ever found by name, so it's simply hidden.
+    pub fn untitle_own_windows() -> Vec<(isize, String)> {
+        use windows_sys::core::BOOL;
+        use windows_sys::Win32::Foundation::LPARAM;
+        use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsWindowVisible, SW_HIDE};
+
+        unsafe extern "system" fn visit(window: HWND, found: LPARAM) -> BOOL {
+            let found = &mut *(found as *mut Vec<isize>);
+            let mut process = 0u32;
+            GetWindowThreadProcessId(window, &mut process);
+            if process == GetCurrentProcessId() && IsWindowVisible(window) != 0 && IsIconic(window) == 0 {
+                found.push(window as isize);
+            }
+            1
+        }
+
+        let mut windows: Vec<isize> = Vec::new();
+        unsafe { EnumWindows(Some(visit), &mut windows as *mut Vec<isize> as LPARAM) };
+        let mut untitled = Vec::new();
+        for handle in windows {
+            let mut class = [0u16; 128];
+            let length = unsafe { GetClassNameW(hwnd(handle), class.as_mut_ptr(), class.len() as i32) };
+            if String::from_utf16_lossy(&class[..length.max(0) as usize]).ends_with("-sic") {
+                unsafe { ShowWindowAsync(hwnd(handle), SW_HIDE) };
+                continue;
+            }
+            let Some(title) = own_title(handle) else { continue };
+            if !title.is_empty() && set_title(handle, "") {
+                untitled.push((handle, title));
+            }
+        }
+        untitled
+    }
+
+    pub fn retitle(windows: &[(isize, String)]) {
+        for (handle, title) in windows {
+            if is_window(*handle) {
+                set_title(*handle, title);
+            }
+        }
+    }
+
+    fn own_title(handle: isize) -> Option<String> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{WM_GETTEXT, WM_GETTEXTLENGTH};
+        const OWN_WINDOW_TIMEOUT_MS: u32 = 1000;
+        let mut length = 0usize;
+        let asked = unsafe { SendMessageTimeoutW(hwnd(handle), WM_GETTEXTLENGTH, 0, 0, SMTO_ABORTIFHUNG, OWN_WINDOW_TIMEOUT_MS, &mut length) };
+        if asked == 0 {
+            return None;
+        }
+        let mut buffer = vec![0u16; length + 1];
+        let mut copied = 0usize;
+        let read = unsafe {
+            SendMessageTimeoutW(hwnd(handle), WM_GETTEXT, buffer.len(), buffer.as_mut_ptr() as isize, SMTO_ABORTIFHUNG, OWN_WINDOW_TIMEOUT_MS, &mut copied)
+        };
+        (read != 0).then(|| String::from_utf16_lossy(&buffer[..copied.min(length)]))
+    }
+
     pub fn set_title(handle: isize, title: &str) -> bool {
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
         let mut result = 0usize;
@@ -680,6 +785,12 @@ mod win {
         Err("Windows Hello needs Windows".to_string())
     }
 
+    pub fn untitle_own_windows() -> Vec<(isize, String)> {
+        Vec::new()
+    }
+
+    pub fn retitle(_windows: &[(isize, String)]) {}
+
     pub fn set_title(_handle: isize, _title: &str) -> bool {
         false
     }
@@ -765,6 +876,29 @@ mod tests {
         let window = &config["app"]["windows"][0];
         assert_eq!(window["visible"], false);
         assert_eq!(window["focus"], false);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_apps_own_windows_go_untitled_while_a_capture_starts() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, GetWindowTextW, WS_OVERLAPPEDWINDOW, WS_VISIBLE};
+        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        let title: Vec<u16> = "probe\0".encode_utf16().collect();
+        let window = unsafe {
+            CreateWindowExW(0, class.as_ptr(), title.as_ptr(), WS_OVERLAPPEDWINDOW | WS_VISIBLE, 0, 0, 200, 100, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null())
+        };
+        assert!(!window.is_null());
+        let read = || {
+            let mut buffer = [0u16; 32];
+            let length = unsafe { GetWindowTextW(window, buffer.as_mut_ptr(), buffer.len() as i32) };
+            String::from_utf16_lossy(&buffer[..length.max(0) as usize])
+        };
+        let untitled = super::win::untitle_own_windows();
+        assert!(untitled.iter().any(|(handle, text)| *handle == window as isize && text == "probe"));
+        assert_eq!(read(), "");
+        super::win::retitle(&untitled);
+        assert_eq!(read(), "probe");
+        unsafe { DestroyWindow(window) };
     }
 
     #[test]
