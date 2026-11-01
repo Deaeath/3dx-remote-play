@@ -393,7 +393,6 @@ mod win {
     use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED};
     use windows_sys::Win32::System::StationsAndDesktops::{CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, DESKTOP_READOBJECTS, UOI_NAME};
     use windows_sys::Win32::System::SystemInformation::GetTickCount;
-    use windows_sys::Win32::System::Threading::{AttachThreadInput};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         GetLastInputInfo, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, LASTINPUTINFO, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE,
         MAPVK_VK_TO_VSC, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
@@ -586,8 +585,8 @@ mod win {
     }
 
     /// Windows lets only the app in front hand over the focus, so if asking isn't
-    /// enough, a tap of Alt counts as use. Never AttachThreadInput here: with this
-    /// app's own window in front, that ties into WebView2's threads and deadlocks them.
+    /// enough, a tap of Alt counts as use. Never share input with the window in front:
+    /// with this app's own window there, that ties into WebView2's threads and deadlocks them.
     pub fn bring_to_front(handle: isize) -> bool {
         let window = hwnd(handle);
         unsafe {
