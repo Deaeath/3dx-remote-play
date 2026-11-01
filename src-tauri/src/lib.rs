@@ -83,6 +83,7 @@ pub fn run() {
             remote_play::remote_play_keep_awake,
             remote_play::remote_play_load_pairing,
             remote_play::remote_play_save_pairing,
+            remote_play::remote_play_log,
             remote_play::remote_play_audio_start,
             remote_play::remote_play_audio_stop,
         ])

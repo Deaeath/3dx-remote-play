@@ -64,6 +64,9 @@ class FakePeer {
   async createAnswer() {
     return { type: "answer" };
   }
+  async getStats() {
+    return new Map();
+  }
   getTransceivers() {
     return [this.video, this.audio];
   }
@@ -132,6 +135,7 @@ function harness(pairing: RemotePairing | null, game: Partial<NativeGameState> =
       peers.push(peer);
       return peer as unknown as RTCPeerConnection;
     },
+    log: vi.fn(),
   } satisfies HostDeps;
   const host = new RemotePlayHost(deps, (snapshot) => snapshots.push(snapshot), (name) => connected.push(name));
   return { host, deps, sockets, peers, snapshots, connected, saved, native, captured };
@@ -265,7 +269,7 @@ describe("Remote Play host", () => {
     await sendOffer(socket, linkCredential(pairing));
     expect(setup.peers[0].remote).toBe("phone-offer-sdp");
     const answer = await unseal(await signalKey(linkCredential(pairing)), "host", socket.sent.at(-1) ?? "");
-    expect(answer).toEqual({ t: "answer", sdp: "host-answer-sdp" });
+    expect(answer).toEqual({ t: "answer", sdp: "host-answer-sdp", to: expect.any(Number) });
     expect(setup.peers[0].video.direction).toBe("sendonly");
   });
 
@@ -499,6 +503,200 @@ describe("Remote Play host", () => {
     expect(setup.sockets).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(2000);
     expect(setup.sockets).toHaveLength(3);
+  });
+
+  it("says which offer an answer is for, so a late one can't land on a newer attempt", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    const at = Date.now() - 1234;
+    await sendOffer(socket, linkCredential(pairing), { at });
+    const answer = await unseal(await signalKey(linkCredential(pairing)), "host", socket.sent.at(-1) ?? "");
+    expect(answer).toMatchObject({ t: "answer", to: at });
+  });
+
+  it("answers only the newest of two quick offers", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    let release = () => {};
+    setup.deps.loadIceServers.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve([]);
+        }),
+    );
+    const first: SignalMessage = { t: "offer", sdp: "first-offer", at: Date.now(), name: "iPhone" };
+    socket.onmessage?.({ data: await seal(await signalKey(linkCredential(pairing)), "phone", first) });
+    await vi.waitFor(() => expect(setup.deps.loadIceServers).toHaveBeenCalledTimes(1), WAIT);
+
+    await sendOffer(socket, linkCredential(pairing), { sdp: "second-offer" });
+    release();
+    await flush();
+    expect(setup.peers).toHaveLength(1);
+    expect(setup.peers[0].remote).toBe("second-offer");
+    expect(setup.peers[0].closed).toBe(false);
+  });
+
+  it("closes the connection for an offer it can't use, and carries on", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    const refuse = vi.spyOn(FakePeer.prototype, "setRemoteDescription").mockRejectedValueOnce(new Error("bad sdp"));
+    const bad: SignalMessage = { t: "offer", sdp: "bad", at: Date.now(), name: "iPhone" };
+    socket.onmessage?.({ data: await seal(await signalKey(linkCredential(pairing)), "phone", bad) });
+    await vi.waitFor(() => expect(setup.peers[0]?.closed).toBe(true), WAIT);
+    refuse.mockRestore();
+    expect(setup.host.snapshot().session).toBeNull();
+    await sendOffer(socket, linkCredential(pairing));
+    expect(setup.host.snapshot().session).not.toBeNull();
+  });
+
+  it("stops the sound if the session ended while it was starting", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    const stopAudio = vi.fn();
+    let audioReady = () => {};
+    setup.deps.startAudio.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          audioReady = () => resolve(stopAudio as never);
+        }),
+    );
+    const channel = await connectPhone(setup, socket, linkCredential(pairing));
+    await vi.waitFor(() => expect(setup.deps.startAudio).toHaveBeenCalled(), WAIT);
+    channel.onclose?.();
+    expect(setup.host.snapshot().session).toBeNull();
+    audioReady();
+    await vi.waitFor(() => expect(stopAudio).toHaveBeenCalled(), WAIT);
+  });
+
+  it("starts no sound for a session that ended while the picture was being set up", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    await sendOffer(socket, linkCredential(pairing));
+    let parametersSet = () => {};
+    setup.peers[0].video.sender.setParameters.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          parametersSet = () => resolve(undefined);
+        }),
+    );
+    const channel = new FakeChannel();
+    setup.peers[0].ondatachannel?.({ channel });
+    await vi.waitFor(() => expect(setup.peers[0].video.sender.setParameters).toHaveBeenCalled(), WAIT);
+    channel.onclose?.();
+    parametersSet();
+    await flush();
+    expect(setup.deps.startAudio).not.toHaveBeenCalled();
+  });
+
+  it("captures one at a time, even across sessions", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    const earlier = fakeStream();
+    let captured = () => {};
+    setup.deps.captureGame.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          captured = () => resolve(earlier.stream);
+        }),
+    );
+    await connectPhone(setup, socket, linkCredential(pairing));
+    await vi.waitFor(() => expect(setup.deps.captureGame).toHaveBeenCalledTimes(1), WAIT);
+
+    // The phone comes back while the first capture is still going.
+    await connectPhone(setup, socket, linkCredential(pairing));
+    await flush();
+    expect(setup.deps.captureGame).toHaveBeenCalledTimes(1);
+
+    captured();
+    await vi.waitFor(() => expect(earlier.track.stop).toHaveBeenCalled(), WAIT);
+    // The new session's next check of the game picks it up.
+    await vi.waitFor(() => expect(setup.deps.captureGame).toHaveBeenCalledTimes(2), WAIT);
+    await vi.waitFor(() => expect(setup.peers[1].video.sender.replaceTrack).toHaveBeenCalledWith(setup.captured.track), WAIT);
+  });
+
+  it("tells the phone the game's state before the capture finishes", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    let captured = () => {};
+    setup.deps.captureGame.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          captured = () => resolve(setup.captured.stream);
+        }),
+    );
+    const channel = await connectPhone(setup, socket, linkCredential(pairing));
+    expect(channel.events().find((event) => event.t === "state")).toMatchObject({ game: "front", video: false });
+    captured();
+    await vi.waitFor(() => expect(channel.events().filter((event) => event.t === "state").at(-1)).toMatchObject({ video: true }), WAIT);
+  });
+
+  it("doesn't keep polling for a session that ended on the way in", async () => {
+    vi.useFakeTimers();
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    await setup.host.start();
+    const socket = setup.sockets[0];
+    socket.onopen?.();
+    const offer: SignalMessage = { t: "offer", sdp: "phone-offer-sdp", at: Date.now(), name: "iPhone" };
+    socket.onmessage?.({ data: await seal(await signalKey(linkCredential(pairing)), "phone", offer) });
+    await vi.waitFor(() => expect(setup.peers).toHaveLength(1));
+    let focused = () => {};
+    setup.deps.focusGame.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          focused = () => resolve(undefined);
+        }),
+    );
+    setup.peers[0].ondatachannel?.({ channel: new FakeChannel() });
+    setup.host.endSession();
+    focused();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(setup.deps.gameState).not.toHaveBeenCalled();
+  });
+
+  it("logs each step, and no addresses", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    await sendOffer(socket, linkCredential(pairing), {
+      sdp: "a=candidate:1 1 udp 2122260223 abc.local 5000 typ host\r\na=candidate:2 1 udp 1686052607 203.0.113.9 6000 typ srflx raddr 0.0.0.0 rport 0\r\n",
+      note: "page 1.0.3; browser",
+    });
+    const channel = new FakeChannel();
+    setup.peers[0].ondatachannel?.({ channel });
+    await vi.waitFor(() => expect(setup.peers[0].video.sender.replaceTrack).toHaveBeenCalled(), WAIT);
+    channel.onclose?.();
+    const log = setup.deps.log.mock.calls.map(([line]) => line).join("\n");
+    expect(log).toContain("offer from iPhone with the pairing link: routes mdns, srflx; page 1.0.3; browser");
+    expect(log).toContain("relay server not set up");
+    expect(log).toContain("connected after");
+    expect(log).toContain("capture: got the game");
+    expect(log).toContain("session over");
+    expect(log).not.toContain("203.0.113.9");
+    expect(log).not.toContain("abc.local");
+  });
+
+  it("logs what the phone reports, and takes it for nothing else", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    const channel = await connectPhone(setup, socket, linkCredential(pairing));
+    channel.onmessage?.({ data: JSON.stringify({ t: "report", text: "picture 1920x1080" }) });
+    channel.onmessage?.({ data: JSON.stringify({ t: "report", text: "x".repeat(5000) }) });
+    channel.onmessage?.({ data: JSON.stringify({ t: "report", text: { not: "text" } }) });
+    await flush();
+    const lines = setup.deps.log.mock.calls.map(([line]) => line).filter((line) => line.startsWith("phone:"));
+    expect(lines[0]).toBe("phone: picture 1920x1080");
+    expect(lines[1].length).toBeLessThan(400);
+    expect(lines).toHaveLength(2);
+    expect(setup.deps.input).not.toHaveBeenCalled();
   });
 
   it("recovers when the saved pairing is unreadable", async () => {

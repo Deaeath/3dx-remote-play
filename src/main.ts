@@ -4,6 +4,7 @@
 // The host keeps running while the window is closed to the tray.
 
 import "./style.css";
+import { getVersion } from "@tauri-apps/api/app";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { LINK_LIFETIME_MS, RemotePlayHost, pairingLink, realHostDeps, type HostSnapshot } from "./host";
@@ -185,4 +186,5 @@ autostartToggle.addEventListener("change", () => {
 
 showAutostart();
 render();
+getVersion().then((version) => realHostDeps.log(`3DX Remote Play ${version} started`)).catch(() => undefined);
 void host.start().catch((error) => console.warn("[remote play] couldn't start:", error));

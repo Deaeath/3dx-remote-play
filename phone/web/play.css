@@ -187,6 +187,12 @@ body.chatting #actions {
   font-size: 15px;
 }
 
+#panel p#panel-detail {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 #panel button {
   min-width: 200px;
   padding: 13px 26px;

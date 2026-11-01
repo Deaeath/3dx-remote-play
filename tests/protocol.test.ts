@@ -9,6 +9,7 @@ import {
   linkFor,
   parseLinkFragment,
   parseRelayNotice,
+  routeKinds,
   seal,
   signalKey,
   unseal,
@@ -17,6 +18,23 @@ import {
 
 const credential = () => ({ room: createRoom(), secret: createSecret() });
 const offer: SignalMessage = { t: "offer", sdp: "v=0", at: 1000, name: "iPhone" };
+
+describe("the routes in an SDP", () => {
+  const line = (address: string, kind: string) => `a=candidate:1 1 udp 2122260223 ${address} 5000 typ ${kind} generation 0`;
+
+  it("names the kinds and never an address", () => {
+    const sdp = ["v=0", line("abc.local", "host"), line("192.168.1.5", "host"), line("203.0.113.9", "srflx"), line("198.51.100.7", "relay"), ""].join("\r\n");
+    expect(routeKinds(sdp)).toBe("host, mdns, relay, srflx");
+  });
+
+  it("says so when there are none", () => {
+    expect(routeKinds("v=0\r\nm=audio 9 X 111\r\n")).toBe("none");
+  });
+
+  it("isn't fooled by a line that only looks like a route", () => {
+    expect(routeKinds("a=note:candidate typ srflx\r\n")).toBe("none");
+  });
+});
 
 describe("Remote Play links", () => {
   it("round-trips a credential through the link's fragment", () => {

@@ -116,8 +116,10 @@ export async function signalKey({ room, secret }: PlayCredential): Promise<Crypt
 
 /** What the two sides exchange through the relay. */
 export type SignalMessage =
-  | { t: "offer"; sdp: string; at: number; name: string }
-  | { t: "answer"; sdp: string };
+  // `note`: how this phone's last attempt went, for the PC's log.
+  | { t: "offer"; sdp: string; at: number; name: string; note?: string }
+  // `to`: the `at` of the offer this answers, so a late answer can't land on a newer attempt.
+  | { t: "answer"; sdp: string; to?: number };
 
 /** The sender is bound in, so a message can't be bounced back at its author. */
 function additionalData(from: PlayRole): Uint8Array<ArrayBuffer> {
@@ -162,6 +164,19 @@ export function isFreshOffer(at: number, now = Date.now()): boolean {
   return Math.abs(now - at) <= OFFER_MAX_AGE_MS;
 }
 
+/**
+ * The kinds of route an SDP offers, without one address, so it's safe to show
+ * and to log: "mdns" a local address behind a made-up name, "host" a local
+ * address, "srflx" a public one, "relay" a TURN server.
+ */
+export function routeKinds(sdp: string): string {
+  const kinds = new Set<string>();
+  for (const [, address, kind] of sdp.matchAll(/^a=candidate:\S+ \d+ \S+ \d+ (\S+) \d+ typ (\w+)/gm)) {
+    kinds.add(kind === "host" && address.endsWith(".local") ? "mdns" : kind);
+  }
+  return kinds.size > 0 ? [...kinds].sort().join(", ") : "none";
+}
+
 /** Keys the phone may press. Mirrors `virtual_key` in src-tauri/src/remote_play.rs, which has the last word. */
 export type PlayKey = "escape" | "f5" | "f6" | "f7";
 
@@ -178,7 +193,7 @@ export type PlayInput =
   | { t: "chat"; text: string };
 
 /** Phone → PC over the data channel. */
-export type PhoneCommand = PlayInput | { t: "focus" } | { t: "launch" } | { t: "paired" };
+export type PhoneCommand = PlayInput | { t: "focus" } | { t: "launch" } | { t: "paired" } | { t: "report"; text: string };
 
 /** "frozen": running, but not answering Windows (hung). */
 export type GamePhase = "closed" | "frozen" | "background" | "front";
@@ -197,6 +212,9 @@ export interface PlayState {
 export type HostEvent = ({ t: "state" } & PlayState) | ({ t: "pair" } & PlayCredential);
 
 export const REMOTE_PLAY_INPUTS: readonly string[] = ["tap", "point", "button", "look", "wheel", "press", "chat"];
+
+/** How the relay closes a socket when another one takes its place in the room. */
+export const RELAY_REPLACED_CODE = 4000;
 
 /** The relay's own frames; everything else it carries is sealed. */
 export type RelayNotice = { relay: "peers"; host: boolean; phone: boolean } | { relay: "denied" };

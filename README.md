@@ -55,6 +55,8 @@ Next time, just open the page you saved. It works on Wi-Fi and on mobile data, w
 - Keep the PC on, signed in and unlocked. While Remote Play is on, the PC won't go to sleep.
 - 3DXChat has to be open, or start it from your phone once it has run on this PC.
 - Closing the window keeps Remote Play running in the tray. **Open with Windows** makes the PC ready again after a restart.
+- A VPN on the PC can stop your phone from reaching it. If your phone stays on **Connecting**, that's the first thing to try turning off.
+- If your phone won't connect, the page shows which step it's on, and the app writes what happened to `remote_play.log` in `%APPDATA%\com.kingcolossus.remoteplay`. It holds no addresses or keys, and it stays on your PC.
 - Windows may say the app is from an unknown publisher: click **More info**, then **Run anyway**.
 
 <details>
@@ -73,7 +75,7 @@ npm run tauri build     # the installer
 npm run deploy:phone    # the phone page and the relay
 ```
 
-**TURN.** Some mobile carriers block direct connections. Create a TURN key under Realtime in the Cloudflare dashboard, then set it on the Pages project:
+**TURN.** Some mobile carriers and VPNs block direct connections. Create a TURN key under Realtime in the Cloudflare dashboard, then set it on the Pages project:
 
 ```powershell
 npx wrangler pages secret put TURN_KEY_ID --project-name 3dx-play

@@ -13,6 +13,7 @@
 
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -50,6 +51,12 @@ const MAX_PAIRING_LEN: usize = 1024;
 const GAME_PATH_FILE: &str = "remote_play_game.txt";
 /// The launcher starts the game with this.
 const GAME_START_ARG: &str = "-start";
+/// What happened on each connection. Only ever on this PC, and never with an
+/// address or a secret in it (src/host.ts).
+const LOG_FILE: &str = "remote_play.log";
+/// Two files of this at most: a phone left retrying all night mustn't fill a disk.
+const MAX_LOG_BYTES: u64 = 256 * 1024;
+const MAX_LOG_LINE: usize = 600;
 
 /// 100 ms of 48 kHz stereo float, matching `AudioData` in src/host.ts. Each
 /// chunk is one trip through the app's message channel, which the phone's
@@ -159,14 +166,26 @@ pub fn remote_play_game_state(app: AppHandle, state: State<'_, RemotePlayState>)
     }
 }
 
-#[tauri::command]
-pub fn remote_play_focus_game() -> Result<(), String> {
+/// For anything that waits on another app's window. On the main thread that
+/// wait would hold up every other command and the app's own window too, and
+/// sharing input with the window in front (`bring_to_front`) would tie that
+/// window to the webview's.
+async fn off_main_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work).await.map_err(|error| error.to_string())
+}
+
+fn focus_game() -> Result<(), String> {
     let game = game_window::find().ok_or("3DXChat isn't running")?;
     if win::bring_to_front(game.handle) {
         Ok(())
     } else {
         Err("Windows kept another window in front".to_string())
     }
+}
+
+#[tauri::command]
+pub async fn remote_play_focus_game() -> Result<(), String> {
+    off_main_thread(focus_game).await?
 }
 
 #[tauri::command]
@@ -221,8 +240,7 @@ fn restore_title(renamed: &Mutex<Option<RenamedWindow>>, generation: Option<u64>
 
 /// Makes the game the one window capture will pick, and returns its handle for
 /// the page to check the capture against.
-#[tauri::command]
-pub fn remote_play_capture_begin(state: State<'_, RemotePlayState>) -> Result<String, String> {
+fn begin_capture(state: &RemotePlayState) -> Result<String, String> {
     let game = game_window::find().ok_or("3DXChat isn't running")?;
     if win::is_hung(game.handle) {
         return Err("3DXChat isn't responding".to_string());
@@ -255,8 +273,16 @@ pub fn remote_play_capture_begin(state: State<'_, RemotePlayState>) -> Result<St
 }
 
 #[tauri::command]
-pub fn remote_play_capture_end(state: State<'_, RemotePlayState>) {
-    restore_title(&state.renamed, None);
+pub async fn remote_play_capture_begin(app: AppHandle) -> Result<String, String> {
+    off_main_thread(move || begin_capture(&app.state::<RemotePlayState>())).await?
+}
+
+#[tauri::command]
+pub async fn remote_play_capture_end(app: AppHandle) -> Result<(), String> {
+    off_main_thread(move || {
+        restore_title(&app.state::<RemotePlayState>().renamed, None);
+    })
+    .await
 }
 
 /// While Remote Play is on the PC mustn't go to sleep, and during a session
@@ -283,6 +309,25 @@ pub fn remote_play_save_pairing(app: AppHandle, pairing: String) -> Result<(), S
         return Err("invalid pairing".to_string());
     }
     secret::write(&config_file(&app, PAIRING_FILE)?, &pairing)
+}
+
+/// One line, and not a long one: some of what's logged comes from the phone.
+fn log_line(line: &str) -> String {
+    line.chars().map(|c| if c.is_control() { ' ' } else { c }).take(MAX_LOG_LINE).collect()
+}
+
+#[tauri::command]
+pub fn remote_play_log(app: AppHandle, line: String) {
+    let Ok(file) = config_file(&app, LOG_FILE) else { return };
+    if let Some(folder) = file.parent() {
+        let _ = fs::create_dir_all(folder);
+    }
+    if fs::metadata(&file).is_ok_and(|meta| meta.len() > MAX_LOG_BYTES) {
+        let _ = fs::rename(&file, file.with_extension("old.log"));
+    }
+    if let Ok(mut log) = fs::OpenOptions::new().create(true).append(true).open(&file) {
+        let _ = writeln!(log, "{}", log_line(&line));
+    }
 }
 
 #[tauri::command]
@@ -592,6 +637,12 @@ mod tests {
         assert!(!is_valid_pairing("not json"));
         assert!(!is_valid_pairing("[1,2,3]"));
         assert!(!is_valid_pairing(&format!(r#"{{"a":"{}"}}"#, "x".repeat(MAX_PAIRING_LEN))));
+    }
+
+    #[test]
+    fn a_log_line_stays_one_short_line() {
+        assert_eq!(log_line("one\r\ntwo"), "one  two");
+        assert_eq!(log_line(&"x".repeat(MAX_LOG_LINE * 2)).chars().count(), MAX_LOG_LINE);
     }
 
     #[test]

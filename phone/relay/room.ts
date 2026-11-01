@@ -6,6 +6,8 @@
 // be cheap and small. WebSockets hibernate between messages, so a PC waiting
 // all day for its phone costs next to nothing.
 
+import { RELAY_REPLACED_CODE } from "../../shared/remotePlay";
+
 interface RelaySocket {
   send(message: string): void;
   close(code?: number, reason?: string): void;
@@ -45,7 +47,7 @@ export class Room {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("expected a websocket", { status: 426 });
 
     // A reconnect takes over from a socket the network dropped silently.
-    for (const stale of this.state.getWebSockets(role)) stale.close(4000, "replaced");
+    for (const stale of this.state.getWebSockets(role)) stale.close(RELAY_REPLACED_CODE, "replaced");
 
     const pair = new WebSocketPair();
     this.state.acceptWebSocket(pair[1], [role]);

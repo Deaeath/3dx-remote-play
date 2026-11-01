@@ -24,6 +24,7 @@ import {
   isFreshOffer,
   linkFor,
   parseRelayNotice,
+  routeKinds,
   seal,
   signalKey,
   unseal,
@@ -32,6 +33,7 @@ import {
   type PhoneCommand,
   type PlayCredential,
   type PlayState,
+  type SignalMessage,
 } from "../shared/remotePlay";
 
 /** An unused link dies after this, so one left on screen doesn't stay a way in. */
@@ -43,6 +45,11 @@ const PING_MS = 25_000;
 const STATE_POLL_MS = 2000;
 const CAPTURE_TIMEOUT_MS = 8000;
 const CAPTURE_RETRY_MS = 6000;
+const ICE_CONFIG_WAIT_MS = 4000;
+/** When to note what the video is doing: once it has had time to start, then now and then. */
+const FIRST_VIDEO_LOG_MS = 5000;
+const VIDEO_LOG_EVERY_MS = 30_000;
+const MAX_REPORT_LENGTH = 300;
 /** A good 1080p picture without eating a phone's data plan: about 2 GB an hour. */
 const MAX_VIDEO_BITRATE = 5_000_000;
 const START_VIDEO_KBPS = 2500;
@@ -88,6 +95,8 @@ export interface HostDeps {
   loadIceServers(): Promise<RTCIceServer[]>;
   createSocket(url: string): WebSocket;
   createPeer(config: RTCConfiguration): RTCPeerConnection;
+  /** A line for the log on this PC. Never an address or a secret. */
+  log(line: string): void;
 }
 
 export interface HostSnapshot {
@@ -210,8 +219,9 @@ interface Session {
   pending: PlayCredential | null;
   poll: ReturnType<typeof setInterval> | null;
   nextCaptureAt: number;
-  capturing: boolean;
+  nextVideoLogAt: number;
   lastState: string;
+  openedAt: number;
 }
 
 export class RemotePlayHost {
@@ -219,6 +229,15 @@ export class RemotePlayHost {
   private socket: WebSocket | null = null;
   private relay: HostSnapshot["relay"] = "off";
   private session: Session | null = null;
+  /** Counts offers, so one still being set up can tell a newer one has come. */
+  private offers = 0;
+  /**
+   * One capture at a time, across sessions too. Capture finds the game by a
+   * title it wears for a moment, and an earlier request finishing puts that
+   * title back from under a later one, which leaves nothing to pick: the webview
+   * then opens its window picker on the PC.
+   */
+  private capturing = false;
   private reconnectDelay = RECONNECT_MIN_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -253,7 +272,7 @@ export class RemotePlayHost {
   }
 
   stop(): void {
-    this.endSession();
+    this.endSession("the app is closing");
     this.goOffline();
   }
 
@@ -263,7 +282,7 @@ export class RemotePlayHost {
     if (enabled) {
       await this.goOnline();
     } else {
-      this.endSession();
+      this.endSession("Remote Play was turned off");
       this.goOffline();
     }
   }
@@ -271,16 +290,17 @@ export class RemotePlayHost {
   /** A fresh link. Any phone paired before is out, on a new room. */
   async newLink(): Promise<void> {
     const enabled = this.pairing?.enabled ?? false;
-    this.endSession();
+    this.endSession("a new link was made");
     this.goOffline();
     await this.store(newPairing(enabled));
     if (enabled) await this.goOnline();
   }
 
-  endSession(): void {
+  endSession(reason = "ended on this PC"): void {
     const session = this.session;
     if (!session) return;
     this.session = null;
+    this.deps.log(`session over after ${Math.round((Date.now() - session.openedAt) / 1000)} s: ${reason}`);
     if (session.poll !== null) clearInterval(session.poll);
     session.stopAudio?.();
     session.stream?.getTracks().forEach((track) => track.stop());
@@ -312,12 +332,14 @@ export class RemotePlayHost {
       if (this.socket !== socket) return;
       this.reconnectDelay = RECONNECT_MIN_MS;
       this.relay = "online";
+      this.deps.log("relay: online");
       this.pingTimer = setInterval(() => socket.send("ping"), PING_MS);
       this.emit();
     };
     socket.onmessage = (event) => void this.onRelayMessage(String(event.data));
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (this.socket !== socket) return;
+      this.deps.log(`relay: dropped (${event?.code}), trying again in ${this.reconnectDelay / 1000} s`);
       this.dropSocket();
       this.relay = "connecting";
       this.emit();
@@ -356,19 +378,36 @@ export class RemotePlayHost {
       const message = await unseal(key, "phone", text);
       if (message?.t === "offer") {
         // Stale means a replay or a phone with the wrong clock, not a stranger.
-        if (isFreshOffer(message.at)) await this.openSession(message.sdp, message.name, credential.viaLink, key);
+        if (isFreshOffer(message.at)) await this.openSession(message, credential.viaLink, key);
+        else this.deps.log("ignored an old offer: a replay, or a phone with the wrong clock");
         return;
       }
     }
     // Wrong secret: an old link, or a phone that was forgotten. Tell it plainly.
+    this.deps.log("refused a message sealed with the wrong secret");
     this.socket?.send(JSON.stringify({ relay: "denied" }));
   }
 
-  private async openSession(sdp: string, name: string, viaLink: boolean, key: CryptoKey): Promise<void> {
-    this.endSession();
+  private async openSession(offer: Extract<SignalMessage, { t: "offer" }>, viaLink: boolean, key: CryptoKey): Promise<void> {
+    const { sdp, name, note, at } = offer;
+    const turn = (this.offers += 1);
+    const openedAt = Date.now();
+    this.endSession("the phone connected again");
+    this.deps.log(`offer from ${name.slice(0, 40)}${viaLink ? " with the pairing link" : ""}: routes ${routeKinds(sdp)}${typeof note === "string" ? `; ${note.slice(0, MAX_REPORT_LENGTH)}` : ""}`);
     const iceServers = await this.deps.loadIceServers().catch(() => STUN);
+    if (turn !== this.offers) return;
     const peer = this.deps.createPeer({ iceServers, bundlePolicy: "max-bundle" });
-    await peer.setRemoteDescription({ type: "offer", sdp: tuneOffer(sdp) });
+    try {
+      await peer.setRemoteDescription({ type: "offer", sdp: tuneOffer(sdp) });
+    } catch (error) {
+      this.deps.log(`couldn't use the offer: ${String(error)}`);
+      peer.close();
+      return;
+    }
+    if (turn !== this.offers) {
+      peer.close();
+      return;
+    }
     const transceivers = peer.getTransceivers();
     const video = transceivers.find((t) => t.receiver.track.kind === "video");
     const audio = transceivers.find((t) => t.receiver.track.kind === "audio");
@@ -392,8 +431,9 @@ export class RemotePlayHost {
       pending: null,
       poll: null,
       nextCaptureAt: 0,
-      capturing: false,
+      nextVideoLogAt: 0,
       lastState: "",
+      openedAt,
     };
     this.session = session;
     this.emit();
@@ -403,31 +443,66 @@ export class RemotePlayHost {
       channel.onopen = () => void this.onChannelOpen(session);
       channel.onmessage = (event) => void this.onCommand(session, String(event.data));
       channel.onclose = () => {
-        if (this.session === session) this.endSession();
+        if (this.session === session) this.endSession("the connection closed");
       };
       if (channel.readyState === "open") void this.onChannelOpen(session);
     };
+    peer.oniceconnectionstatechange = () => {
+      if (this.session === session) this.deps.log(`path: ${peer.iceConnectionState} after ${Date.now() - openedAt} ms`);
+    };
     peer.onconnectionstatechange = () => {
       const state = peer.connectionState;
-      if (this.session === session && (state === "failed" || state === "closed")) this.endSession();
+      if (this.session === session && (state === "failed" || state === "closed")) this.endSession(`the connection ${state}`);
     };
 
-    await peer.setLocalDescription(await peer.createAnswer());
-    await iceGathered(peer);
+    try {
+      await peer.setLocalDescription(await peer.createAnswer());
+      await iceGathered(peer);
+    } catch (error) {
+      this.deps.log(`couldn't answer: ${String(error)}`);
+      if (this.session === session) this.endSession("couldn't answer");
+      return;
+    }
     if (this.session !== session) return;
-    this.socket?.send(await seal(key, "host", { t: "answer", sdp: peer.localDescription?.sdp ?? "" }));
+    const answer = peer.localDescription?.sdp ?? "";
+    const relayServer = iceServers.some(({ urls }) => [urls].flat().some((url) => url.startsWith("turn")));
+    this.deps.log(`answered after ${Date.now() - openedAt} ms: routes ${routeKinds(answer)}, relay server ${relayServer ? "available" : "not set up"}`);
+    this.socket?.send(await seal(key, "host", { t: "answer", sdp: answer, to: at }));
   }
 
   private async onChannelOpen(session: Session): Promise<void> {
     if (session.live || this.session !== session) return;
     session.live = true;
+    this.deps.log(`connected after ${Date.now() - session.openedAt} ms`);
+    void this.logPath(session);
     this.emit();
     this.onPhoneConnected(session.name);
     void this.deps.keepAwake(true, true).catch(() => undefined);
     if (session.viaLink) this.beginPairing(session);
     await this.deps.focusGame().catch(() => undefined);
-    await this.refreshGame(session);
+    if (this.session !== session) return;
     session.poll = setInterval(() => void this.refreshGame(session), STATE_POLL_MS);
+    await this.refreshGame(session);
+  }
+
+  /** Which way the connection actually went. */
+  private async logPath(session: Session): Promise<void> {
+    const stats = await session.peer.getStats().catch(() => null);
+    stats?.forEach((report) => {
+      if (report.type !== "candidate-pair" || !report.nominated || report.state !== "succeeded") return;
+      const rtt = report.currentRoundTripTime === undefined ? "" : `, ${Math.round(report.currentRoundTripTime * 1000)} ms`;
+      this.deps.log(`path: ${stats.get(report.localCandidateId)?.candidateType} to ${stats.get(report.remoteCandidateId)?.candidateType}${rtt}`);
+    });
+  }
+
+  /** What's really going out, so "no picture" can be told from "no connection". */
+  private async logVideo(session: Session): Promise<void> {
+    const stats = await session.peer.getStats().catch(() => null);
+    stats?.forEach((report) => {
+      if (report.type !== "outbound-rtp" || report.kind !== "video") return;
+      const size = `${report.frameWidth}x${report.frameHeight}`;
+      this.deps.log(`video: ${report.framesSent} frames sent, ${size}, ${report.encoderImplementation}, held back by ${report.qualityLimitationReason}, ${Math.round(report.bytesSent / 1_000_000)} MB`);
+    });
   }
 
   /** Swap the one-time link for a room and secret only this phone holds. */
@@ -464,10 +539,23 @@ export class RemotePlayHost {
     if (!native || this.session !== session) return;
 
     const track = session.stream?.getVideoTracks()[0];
-    if (track?.readyState === "ended") this.dropCapture(session);
-    if (native.running && native.responding && !session.stream && !native.locked) await this.startCapture(session);
-    if (this.session !== session) return;
+    if (track?.readyState === "ended") {
+      this.deps.log("capture: the picture stopped");
+      this.dropCapture(session);
+    }
+    this.sendState(session, native);
+    if (native.running && native.responding && !session.stream && !native.locked) {
+      await this.startCapture(session);
+      if (this.session !== session) return;
+      this.sendState(session, native);
+    }
+    if (session.stream && Date.now() >= session.nextVideoLogAt) {
+      session.nextVideoLogAt = Date.now() + VIDEO_LOG_EVERY_MS;
+      void this.logVideo(session);
+    }
+  }
 
+  private sendState(session: Session, native: NativeGameState): void {
     const state: PlayState = {
       game: gamePhase(native),
       video: session.stream !== null,
@@ -491,15 +579,18 @@ export class RemotePlayHost {
   }
 
   private async startCapture(session: Session): Promise<void> {
-    if (session.capturing || Date.now() < session.nextCaptureAt) return;
-    session.capturing = true;
+    if (this.capturing || Date.now() < session.nextCaptureAt) return;
+    this.capturing = true;
+    const started = Date.now();
     try {
       const stream = await this.deps.captureGame();
+      this.deps.log(`capture: got the game after ${Date.now() - started} ms`);
       if (this.session !== session) {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
       session.stream = stream;
+      session.nextVideoLogAt = Date.now() + FIRST_VIDEO_LOG_MS;
       const [track] = stream.getVideoTracks();
       track.contentHint = "motion";
       await session.video.sender.replaceTrack(track);
@@ -509,12 +600,19 @@ export class RemotePlayHost {
         encoding.maxFramerate = MAX_FRAME_RATE;
       }
       await session.video.sender.setParameters(parameters).catch(() => undefined);
-      session.stopAudio = await this.deps.startAudio(session.audio.sender).catch(() => null);
+      if (this.session !== session) return;
+      const stopAudio = await this.deps.startAudio(session.audio.sender).catch((error: unknown) => {
+        this.deps.log(`sound: couldn't start: ${String(error)}`);
+        return null;
+      });
+      // Sound runs until told to stop, and nothing tells a session that's over.
+      if (this.session === session) session.stopAudio = stopAudio;
+      else stopAudio?.();
     } catch (error) {
-      console.warn("[remote play] capture failed:", error);
+      this.deps.log(`capture: failed: ${String(error)}`);
       session.nextCaptureAt = Date.now() + CAPTURE_RETRY_MS;
     } finally {
-      session.capturing = false;
+      this.capturing = false;
     }
   }
 
@@ -529,6 +627,8 @@ export class RemotePlayHost {
       await this.refreshGame(session);
     } else if (command.t === "launch") {
       await this.deps.launchGame().catch(() => undefined);
+    } else if (command.t === "report") {
+      if (typeof command.text === "string") this.deps.log(`phone: ${command.text.slice(0, MAX_REPORT_LENGTH)}`);
     } else if (REMOTE_PLAY_INPUTS.includes(command.t)) {
       // Refused while the game isn't in front; the next state update says why.
       await this.deps.input(command).catch(() => undefined);
@@ -602,9 +702,15 @@ async function startAudio(sender: RTCRtpSender): Promise<() => void> {
 }
 
 async function loadIceServers(): Promise<RTCIceServer[]> {
-  const response = await fetch(`${PLAY_ORIGIN}/ice`, { cache: "no-store" });
-  const body = (await response.json()) as { iceServers?: RTCIceServer[] };
-  return Array.isArray(body.iceServers) ? body.iceServers : STUN;
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), ICE_CONFIG_WAIT_MS);
+  try {
+    const response = await fetch(`${PLAY_ORIGIN}/ice`, { cache: "no-store", signal: stop.signal });
+    const body = (await response.json()) as { iceServers?: RTCIceServer[] };
+    return Array.isArray(body.iceServers) ? body.iceServers : STUN;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export const realHostDeps: HostDeps = {
@@ -621,4 +727,7 @@ export const realHostDeps: HostDeps = {
   loadIceServers,
   createSocket: (url) => new WebSocket(url),
   createPeer: (config) => new RTCPeerConnection(config),
+  log: (line) => {
+    invoke("remote_play_log", { line: `${new Date().toLocaleString("sv")}  ${line}` }).catch(() => undefined);
+  },
 };

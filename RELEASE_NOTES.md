@@ -1,4 +1,10 @@
-Smoother controls: the game's sound now travels in fewer, larger pieces, so your touches reach the game without waiting behind it.
+A steadier connection, and you can see what it's doing:
+
+- Your phone now shows which step it's on while connecting, and says what went wrong if a step fails.
+- A phone left waiting no longer stays stuck after you switch apps or lock it: it starts again when you come back.
+- Connecting again quickly can't leave capture or game sound running behind it, or open a window picker on your PC.
+- The app stays responsive while it brings the game forward and starts the picture.
+- The app keeps a short log of each connection on your PC, with no addresses or keys in it.
 
 3DX Remote Play plays 3DXChat on your phone, from anywhere:
 
