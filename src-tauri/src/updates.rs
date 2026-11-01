@@ -48,8 +48,10 @@ async fn check(app: &AppHandle, started: Instant) -> Result<(), Error> {
         return Ok(());
     }
     let Some(update) = app.updater()?.check().await? else {
+        note(app, "update: already on the newest version".to_string());
         return Ok(());
     };
+    note(app, format!("update: found {}, downloading", update.version));
     // This is where a bad signature gets refused.
     let bytes = update.download(|_, _| {}, || {}).await?;
     let version = update.version.clone();
@@ -75,12 +77,21 @@ async fn check(app: &AppHandle, started: Instant) -> Result<(), Error> {
 }
 
 pub fn start(app: AppHandle) {
+    let reporter = app.clone();
+    let earlier = std::panic::take_hook();
+    // A tray app has no console, so a panic would otherwise vanish, taking the updater with it.
+    std::panic::set_hook(Box::new(move |info| {
+        note(&reporter, format!("crash: {info}"));
+        earlier(info);
+    }));
     thread::spawn(move || {
         let started = Instant::now();
         loop {
+            note(&app, format!("update: checking from {}", app.package_info().version));
             match tauri::async_runtime::block_on(check(&app, started)) {
+                Ok(()) => {}
                 // A release with no signed update yet, which isn't a problem.
-                Ok(()) | Err(Error::ReleaseNotFound) => {}
+                Err(Error::ReleaseNotFound) => note(&app, "update: no signed update published".to_string()),
                 Err(error) => note(&app, format!("update: {error}")),
             }
             thread::sleep(CHECK_EVERY);
