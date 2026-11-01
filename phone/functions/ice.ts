@@ -32,8 +32,13 @@ async function turnServers(env: IceContext["env"]): Promise<unknown> {
   return body.iceServers ?? null;
 }
 
+/** Cloudflare also lists port 53, which browsers won't use. */
+function withoutPort53(server: { urls?: string | string[] }): unknown {
+  return { ...server, urls: [server.urls ?? []].flat().filter((url) => !/:53(\?|$)/.test(url)) };
+}
+
 export async function onRequestGet({ env }: IceContext): Promise<Response> {
   const turn = await turnServers(env).catch(() => null);
-  const iceServers = turn === null ? [STUN] : [STUN, ...(Array.isArray(turn) ? turn : [turn])];
+  const iceServers = turn === null ? [STUN] : [STUN, ...(Array.isArray(turn) ? turn : [turn]).map(withoutPort53)];
   return new Response(JSON.stringify({ iceServers }), { headers: HEADERS });
 }
