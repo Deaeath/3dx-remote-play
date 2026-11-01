@@ -1,10 +1,7 @@
-A steadier connection, and you can see what it's doing:
+A clearer name, and the game keeps the focus:
 
-- Your phone now shows which step it's on while connecting, and says what went wrong if a step fails.
-- A phone left waiting no longer stays stuck after you switch apps or lock it: it starts again when you come back.
-- Connecting again quickly can't leave capture or game sound running behind it, or open a window picker on your PC.
-- The app stays responsive while it brings the game forward and starts the picture.
-- The app keeps a short log of each connection on your PC, with no addresses or keys in it.
+- The bar Windows shows while the game is shared now names `remote-play.3dx`.
+- Starting in the tray no longer takes the focus away from the game.
 
 3DX Remote Play plays 3DXChat on your phone, from anywhere:
 

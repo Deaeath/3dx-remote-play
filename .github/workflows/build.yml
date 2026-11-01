@@ -75,6 +75,22 @@ jobs:
           & $tests
           exit $LASTEXITCODE
 
+      # A wrong address or permission only shows in the running app: this line
+      # gets to the log only if the page loaded and could call the app.
+      - name: Start the built app
+        shell: pwsh
+        run: |
+          $app = Start-Process src-tauri/target/release/3dx-remote-play.exe -ArgumentList '--minimized' -PassThru
+          $log = Join-Path $env:APPDATA 'com.kingcolossus.remoteplay/remote_play.log'
+          $started = $false
+          for ($i = 0; $i -lt 60 -and -not $started; $i++) {
+            Start-Sleep -Seconds 1
+            $started = (Test-Path $log) -and (Select-String -Path $log -Pattern 'started on remote-play\.3dx$' -Quiet)
+          }
+          if (Test-Path $log) { Get-Content $log }
+          Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+          if (-not $started) { throw 'the app did not start on its address' }
+
       - name: Publish the release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh

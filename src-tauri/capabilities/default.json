@@ -3,11 +3,27 @@
   "identifier": "default",
   "description": "The app's one window: Remote Play's own commands, the connect notification and Open with Windows.",
   "windows": ["main"],
+  "remote": {
+    "urls": ["https://remote-play.3dx/*"]
+  },
   "permissions": [
     "core:default",
     "notification:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
-    "autostart:allow-is-enabled"
+    "autostart:allow-is-enabled",
+    "allow-remote-play-game-state",
+    "allow-remote-play-focus-game",
+    "allow-remote-play-launch-game",
+    "allow-remote-play-input",
+    "allow-remote-play-release",
+    "allow-remote-play-capture-begin",
+    "allow-remote-play-capture-end",
+    "allow-remote-play-keep-awake",
+    "allow-remote-play-load-pairing",
+    "allow-remote-play-save-pairing",
+    "allow-remote-play-log",
+    "allow-remote-play-audio-start",
+    "allow-remote-play-audio-stop"
   ]
 }
