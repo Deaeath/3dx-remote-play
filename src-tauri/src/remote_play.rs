@@ -81,7 +81,7 @@ pub struct RemotePlayState {
 }
 
 impl RemotePlayState {
-    fn release_held(&self) {
+    pub fn release_held(&self) {
         let actions = self.held.lock().map(|mut held| held.release()).unwrap_or_default();
         run(actions);
     }

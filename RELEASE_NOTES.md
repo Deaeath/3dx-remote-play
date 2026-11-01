@@ -8,6 +8,7 @@ Locked to you, a clearer name, and the game keeps the focus:
 - Hide the game on your PC from your phone, and have it hide by itself once your phone has left and nobody's at the PC.
 - A red dot on the tray icon shows when a phone is connected.
 - Typing stops the moment the game leaves the front, even halfway through a message, and anything held down is let go.
+- The app now keeps itself up to date, and only accepts updates signed by the maintainer. This one you still install by hand.
 - New on your phone: a full keyboard in three sizes, and a controller, on screen or paired over Bluetooth.
 
 3DX Remote Play plays 3DXChat on your phone, from anywhere:

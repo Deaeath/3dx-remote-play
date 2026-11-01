@@ -10,6 +10,13 @@
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg2QjdGM0Q2M0EzNTc0RkUKUldUK2REVTYxdk8zaGtnNExjWjdLZlhWTHgzZ2xrNDFkUjdJdGtYRUh2WFFqRGw2am53MWpaQkUK",
+      "endpoints": ["https://github.com/Deaeath/3dx-remote-play/releases/latest/download/latest.json"],
+      "windows": { "installMode": "quiet" }
+    }
+  },
   "app": {
     "windows": [
       {

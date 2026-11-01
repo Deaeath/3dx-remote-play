@@ -61,6 +61,7 @@ Next time, just open the page you saved. It works on Wi-Fi and on mobile data, w
 - Your phone types into whichever chat box is active in the game, so tap the one you want first.
 - If your phone won't connect, the page shows which step it's on, and the app writes what happened to `remote_play.log` in `%APPDATA%\com.kingcolossus.remoteplay`. It holds no addresses or keys, and it stays on your PC.
 - Windows may say the app is from an unknown publisher: click **More info**, then **Run anyway**.
+- The app keeps itself up to date. It checks GitHub every few hours and only accepts updates signed with a key that never leaves the maintainer's PC. An update waiting when the app starts goes in straight away, and one found later waits for you to choose **Restart to update** from the tray icon.
 
 <details>
 <summary><b>🛠️ For developers</b></summary>
@@ -84,6 +85,8 @@ npm run deploy:phone    # the phone page and the relay
 npx wrangler pages secret put TURN_KEY_ID --project-name 3dx-play
 npx wrangler pages secret put TURN_KEY_TOKEN --project-name 3dx-play
 ```
+
+**Releasing.** Push a `v*` tag, then run `scripts\sign-release.ps1 v1.2.3` on the PC with the signing key. Until then the release exists but the app won't update to it. The key must never go on GitHub. A copy of this app needs its own key: `npx tauri signer generate`, and its public half in `src-tauri/tauri.conf.json`.
 
 **Moving the phone page.** Its address is in `shared/remotePlay.ts` (`PLAY_ORIGIN`), the `connect-src` of `src-tauri/tauri.conf.json` and `phone/web/public/_headers`.
 

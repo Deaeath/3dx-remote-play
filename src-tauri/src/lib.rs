@@ -2,6 +2,7 @@ mod game_window;
 mod remote_input;
 mod remote_play;
 mod secret;
+mod updates;
 
 use tauri::http::{header, Response, StatusCode};
 use tauri::image::Image;
@@ -19,6 +20,7 @@ const PAGE_URL: &str = "remote-play://3dx/";
 const MINIMIZED_ARG: &str = "--minimized";
 const TRAY_OPEN: &str = "open";
 const TRAY_QUIT: &str = "quit";
+const TRAY_UPDATE: &str = "update";
 const TRAY_ID: &str = "tray";
 const TRAY_TOOLTIP: &str = "3DX Remote Play";
 const MAX_PHONE_NAME_CHARS: usize = 40;
@@ -74,6 +76,7 @@ fn with_connected_dot(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
 /// Shows on the tray whether a phone is connected, and which.
 #[tauri::command]
 fn remote_play_show_connected(app: AppHandle, phone: Option<String>) -> Result<(), String> {
+    app.state::<updates::UpdateState>().set_phone_connected(phone.is_some());
     let tray = app.tray_by_id(TRAY_ID).ok_or("the tray icon is missing")?;
     let icon = app.default_window_icon().ok_or("the app has no icon")?;
     let tooltip = match &phone {
@@ -92,11 +95,29 @@ fn remote_play_show_connected(app: AppHandle, phone: Option<String>) -> Result<(
     tray.set_tooltip(Some(tooltip)).map_err(|error| error.to_string())
 }
 
-fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+fn tray_menu(app: &AppHandle, update: Option<&str>) -> tauri::Result<Menu<tauri::Wry>> {
     let open = MenuItem::with_id(app, TRAY_OPEN, "Open 3DX Remote Play", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, TRAY_QUIT, "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &separator, &quit])?;
+    match update {
+        Some(version) => {
+            let restart = MenuItem::with_id(app, TRAY_UPDATE, format!("Restart to update to {version}"), true, None::<&str>)?;
+            Menu::with_items(app, &[&open, &restart, &separator, &quit])
+        }
+        None => Menu::with_items(app, &[&open, &separator, &quit]),
+    }
+}
+
+/// Puts the waiting update in the tray menu.
+pub fn offer_update(app: &AppHandle, version: &str) -> tauri::Result<()> {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        tray.set_menu(Some(tray_menu(app, Some(version))?))?;
+    }
+    Ok(())
+}
+
+fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    let menu = tray_menu(app, None)?;
 
     let mut tray = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip(TRAY_TOOLTIP)
@@ -104,6 +125,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             TRAY_OPEN => show_main(app),
+            TRAY_UPDATE => updates::install_ready(app),
             TRAY_QUIT => app.exit(0),
             _ => {}
         })
@@ -126,12 +148,17 @@ pub fn run() {
         // over the game.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec![MINIMIZED_ARG])))
         .manage(remote_play::RemotePlayState::default())
+        .manage(updates::UpdateState::default())
         .register_uri_scheme_protocol(PAGE_SCHEME, |context, request| serve_page(context.app_handle(), request.uri().path()))
         .setup(|app| {
             open_main_window(app.handle())?;
             setup_tray(app.handle())?;
+            if !tauri::is_dev() {
+                updates::start(app.handle().clone());
+            }
             if !std::env::args().any(|arg| arg == MINIMIZED_ARG) {
                 show_main(app.handle());
             }
