@@ -33,6 +33,46 @@ const ROWS: KeyDef[][] = [
 ];
 
 const SHIFT = "shift";
+const SIZE_KEY = "3dx-play:keyboard-size";
+const SIZES = ["small", "medium", "large"];
+const DEFAULT_SIZE = "medium";
+
+/** Only a convenience, so it mustn't matter if the phone won't store it. */
+function savedSize(): string {
+  try {
+    const size = localStorage.getItem(SIZE_KEY);
+    return size && SIZES.includes(size) ? size : DEFAULT_SIZE;
+  } catch {
+    return DEFAULT_SIZE;
+  }
+}
+
+function saveSize(size: string): void {
+  try {
+    localStorage.setItem(SIZE_KEY, size);
+  } catch {
+    // It just won't be remembered.
+  }
+}
+
+function buildSizePicker(root: HTMLElement): HTMLSelectElement {
+  const picker = document.createElement("select");
+  picker.className = "key-size";
+  picker.setAttribute("aria-label", "Keyboard size");
+  for (const size of SIZES) {
+    const option = document.createElement("option");
+    option.value = size;
+    option.textContent = size[0].toUpperCase() + size.slice(1);
+    picker.append(option);
+  }
+  picker.value = savedSize();
+  root.dataset.size = picker.value;
+  picker.addEventListener("change", () => {
+    root.dataset.size = picker.value;
+    saveSize(picker.value);
+  });
+  return picker;
+}
 
 /** Follows one finger on an element until it lifts, even off the element. */
 function onPress(element: HTMLElement, down: (event: PointerEvent) => void, up: () => void, move?: (event: PointerEvent) => void): void {
@@ -103,6 +143,7 @@ export function buildKeyboard(root: HTMLElement, input: (command: PhoneCommand) 
     }
     root.append(line);
   }
+  root.lastElementChild?.prepend(buildSizePicker(root));
 
   return () => {
     for (const key of [...down]) setKey(key, false);

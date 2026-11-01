@@ -110,9 +110,21 @@ body.chatting #actions {
   left: calc(var(--safe-left) + 6px);
   right: calc(var(--safe-right) + 6px);
   bottom: calc(var(--safe-bottom) + 6px);
+  --key-height: 36px;
+  --key-font: 13px;
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+#keyboard[data-size="small"] {
+  --key-height: 28px;
+  --key-font: 11px;
+}
+
+#keyboard[data-size="large"] {
+  --key-height: 46px;
+  --key-font: 15px;
 }
 
 #keyboard[hidden],
@@ -128,14 +140,26 @@ body.chatting #actions {
 .key {
   flex: 1 1 0;
   min-width: 0;
-  height: 36px;
+  height: var(--key-height);
   padding: 0;
   border: 0;
   border-radius: 7px;
   color: #fff;
   background: rgba(22, 22, 31, 0.78);
-  font-size: 13px;
+  font-size: var(--key-font);
   touch-action: none;
+}
+
+.key-size {
+  flex: 0 0 92px;
+  height: var(--key-height);
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  color: #fff;
+  background: var(--accent);
+  /* 16px keeps iOS from zooming the page on focus. */
+  font-size: 16px;
 }
 
 .key.pressed,

@@ -50,6 +50,45 @@ describe("the keyboard", () => {
     ]);
   });
 
+  describe("its size", () => {
+    const picker = () => root.querySelector("select")!;
+    const choose = (size: string) => {
+      picker().value = size;
+      picker().dispatchEvent(new Event("change"));
+    };
+
+    beforeEach(() => {
+      localStorage.clear();
+      root = document.createElement("section");
+      release = buildKeyboard(root, (command) => sent.push(command));
+    });
+
+    it("starts at medium, with small and large on offer", () => {
+      expect(root.dataset.size).toBe("medium");
+      expect([...picker().options].map((option) => option.value)).toEqual(["small", "medium", "large"]);
+    });
+
+    it("changes when picked, and presses nothing in the game", () => {
+      choose("large");
+      expect(root.dataset.size).toBe("large");
+      expect(sent).toEqual([]);
+    });
+
+    it("is remembered next time", () => {
+      choose("small");
+      const next = document.createElement("section");
+      buildKeyboard(next, () => undefined);
+      expect(next.dataset.size).toBe("small");
+    });
+
+    it("ignores a stored size that doesn't exist", () => {
+      localStorage.setItem("3dx-play:keyboard-size", "giant");
+      const next = document.createElement("section");
+      buildKeyboard(next, () => undefined);
+      expect(next.dataset.size).toBe("medium");
+    });
+  });
+
   it("offers no key that reaches outside the game", () => {
     for (const name of ["lwin", "rwin", "win", "alt", "menu", "ctrl", "control", "up"]) {
       expect(key(name)).toBeNull();
