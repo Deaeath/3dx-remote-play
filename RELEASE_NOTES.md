@@ -1,8 +1,6 @@
-Uses far less data:
+Easier to look after:
 
-- The picture now defaults to **Balanced**, at most about 0.7 GB an hour. Pick **Data saver** (about 0.3 GB) or **Best** (about 1.8 GB) on your phone.
-- Your phone shows how much data the session has used.
-- No picture is sent while your phone is locked or in another app.
+- The app's log now says what each update check found, and records any crash.
 
 3DX Remote Play plays 3DXChat on your phone, from anywhere:
 
