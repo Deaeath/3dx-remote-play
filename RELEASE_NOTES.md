@@ -1,4 +1,6 @@
-A clearer name, and the game keeps the focus:
+Locked to you, a clearer name, and the game keeps the focus:
+
+- Every new connection now takes Face ID or your passcode, and pairing takes Windows Hello on your PC. Your phone needs pairing again once, and your PC needs a Windows PIN.
 
 - The bar Windows shows while the game is shared now names `remote-play.3dx`.
 - Starting in the tray no longer takes the focus away from the game.

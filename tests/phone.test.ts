@@ -4,10 +4,19 @@
 // a phone can sit on "Connecting" with nothing happening.
 
 import { readFileSync } from "node:fs";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { RELAY_REPLACED_CODE, createRoom, createSecret, seal, signalKey, unseal, type PlayCredential, type SignalMessage } from "../shared/remotePlay";
 
 const credential: PlayCredential = { room: createRoom(), secret: createSecret() };
+const savedCredential = { ...credential, passkey: "saved-passkey" };
+const PROOF = { credentialId: "saved-passkey", authenticatorData: "a", clientDataJSON: "c", signature: "s" };
+
+const passkeys = vi.hoisted(() => ({
+  canUsePasskeys: vi.fn(async () => true),
+  makePasskey: vi.fn(),
+  provePasskey: vi.fn(),
+}));
+vi.mock("../phone/web/passkeys", () => passkeys);
 const OPEN = 1;
 const OFFER_SDP = "v=0\r\na=candidate:1 1 udp 2122260223 abc.local 5000 typ host\r\na=candidate:2 1 udp 1686052607 203.0.113.9 6000 typ srflx raddr 0.0.0.0 rport 0\r\n";
 const ANSWER_SDP = "v=0\r\na=candidate:1 1 udp 1686052607 198.51.100.7 7000 typ srflx raddr 0.0.0.0 rport 0\r\n";
@@ -156,7 +165,7 @@ function backToStart(): void {
 beforeAll(async () => {
   const body = /<body>([\s\S]*)<\/body>/.exec(readFileSync("phone/web/index.html", "utf8"))?.[1] ?? "";
   document.body.innerHTML = body;
-  localStorage.setItem("3dx-play:v1", JSON.stringify(credential));
+  localStorage.setItem("3dx-play:v1", JSON.stringify(savedCredential));
   vi.stubGlobal("__PAGE_VERSION__", "test");
   vi.stubGlobal("WebSocket", FakeSocket);
   vi.stubGlobal("RTCPeerConnection", FakePeer);
@@ -358,5 +367,120 @@ describe("the phone page while connecting", () => {
     expect(detail()).toBe("");
     peer.channel.onmessage?.({ data: JSON.stringify({ t: "state", game: "front", video: true, locked: false, canLaunch: true }) });
     expect(document.getElementById("panel")?.hidden).toBe(true);
+  });
+});
+
+describe("the phone page and its passkey", () => {
+  it("signs when the PC challenges, then sends the same offer with the proof", async () => {
+    passkeys.provePasskey.mockResolvedValueOnce(PROOF);
+    const { socket, offer } = await startedAndOffered();
+    expect(offer.proof).toBeUndefined();
+    socket.onmessage?.({ data: await seal(await key(), "host", { t: "challenge", nonce: "n1" }) });
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    const signed = await offerFrom(socket, 2);
+    expect(passkeys.provePasskey).toHaveBeenLastCalledWith("saved-passkey", "n1", OFFER_SDP);
+    expect(signed.proof).toEqual(PROOF);
+    expect(signed.sdp).toBe(offer.sdp);
+  });
+
+  it("offers an Unlock button when the phone wants a tap first, and it does the job", async () => {
+    passkeys.provePasskey.mockRejectedValueOnce(new DOMException("needs a tap", "NotAllowedError"));
+    const { socket } = await startedAndOffered();
+    socket.onmessage?.({ data: await seal(await key(), "host", { t: "challenge", nonce: "n2" }) });
+    await vi.waitFor(() => expect(panelTitle()).toBe("Unlock to play"));
+    expect(socket.sent).toHaveLength(1);
+    passkeys.provePasskey.mockResolvedValueOnce(PROOF);
+    click("panel-action");
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    expect((await offerFrom(socket, 2)).proof).toEqual(PROOF);
+  });
+
+  it("gives up with a plain message when the PC keeps refusing the passkey", async () => {
+    passkeys.provePasskey.mockResolvedValue(PROOF);
+    const { socket } = await startedAndOffered();
+    const challenge = async (nonce: string) => socket.onmessage?.({ data: await seal(await key(), "host", { t: "challenge", nonce }) });
+    await challenge("n3");
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    await challenge("n4");
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(3));
+    await challenge("n5");
+    await vi.waitFor(() => expect(panelTitle()).toBe("Your PC doesn't know this phone"));
+    passkeys.provePasskey.mockReset();
+  });
+
+  it("comes back without the passkey after a drop, and never stores the way back", async () => {
+    const { socket, offer, peer } = await startedAndOffered();
+    await answer(socket, offer.at);
+    await vi.waitFor(() => expect(peer.remote).toHaveLength(1));
+    peer.channel.onopen?.();
+    peer.channel.onmessage?.({ data: JSON.stringify({ t: "resume", token: "come-back" }) });
+    expect(JSON.stringify({ ...localStorage })).not.toContain("come-back");
+    const seen = FakeSocket.all.length;
+    peer.channel.onclose?.();
+    await vi.waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(seen), { timeout: 4000 });
+    const next = await nextSocket();
+    next.hostIsHere();
+    expect((await offerFrom(next)).resume).toBe("come-back");
+  });
+
+  it("wants the passkey again after a reload", async () => {
+    const { offer } = await startedAndOffered();
+    expect(offer.resume).toBeUndefined();
+  });
+
+  it("asks a phone paired before passkeys to pair again", () => {
+    localStorage.setItem("3dx-play:v1", JSON.stringify(credential));
+    backToStart();
+    expect(panelTitle()).toBe("Pair this phone again");
+    localStorage.setItem("3dx-play:v1", JSON.stringify(savedCredential));
+    backToStart();
+  });
+});
+
+describe("the phone page pairing", () => {
+  const paired = { t: "pair", room: createRoom(), secret: createSecret(), challenge: "c1" };
+
+  async function liveOnLink() {
+    const { socket, offer, peer } = await startedAndOffered();
+    await answer(socket, offer.at);
+    await vi.waitFor(() => expect(peer.remote).toHaveLength(1));
+    peer.channel.readyState = "open";
+    peer.channel.onopen?.();
+    peer.channel.onmessage?.({ data: JSON.stringify(paired) });
+    return peer;
+  }
+
+  afterEach(() => {
+    localStorage.setItem("3dx-play:v1", JSON.stringify(savedCredential));
+  });
+
+  it("asks for a tap, makes the passkey, and only then keeps the new key", async () => {
+    const peer = await liveOnLink();
+    expect(panelTitle()).toBe("Secure this phone");
+    expect(JSON.parse(localStorage.getItem("3dx-play:v1") ?? "{}").room).toBe(savedCredential.room);
+    passkeys.canUsePasskeys.mockResolvedValueOnce(true);
+    passkeys.makePasskey.mockResolvedValueOnce({ credentialId: "new-passkey", publicKey: "p", authenticatorData: "a", clientDataJSON: "c" });
+    click("panel-action");
+    await vi.waitFor(() => expect(peer.channel.sent.length).toBeGreaterThan(0));
+    expect(passkeys.makePasskey).toHaveBeenCalledWith("c1");
+    expect(JSON.parse(localStorage.getItem("3dx-play:v1") ?? "{}")).toMatchObject({ room: paired.room, secret: paired.secret, passkey: "new-passkey" });
+    expect(JSON.parse(peer.channel.sent.at(-1) ?? "{}")).toMatchObject({ t: "paired", passkey: { credentialId: "new-passkey" } });
+  });
+
+  it("says what to do on a phone with no screen lock, and keeps nothing", async () => {
+    await liveOnLink();
+    passkeys.canUsePasskeys.mockResolvedValueOnce(false);
+    click("panel-action");
+    await vi.waitFor(() => expect(panelTitle()).toBe("Set a passcode first"));
+    expect(JSON.parse(localStorage.getItem("3dx-play:v1") ?? "{}").room).toBe(savedCredential.room);
+  });
+
+  it("lets a cancelled Face ID be tried again, and keeps nothing", async () => {
+    await liveOnLink();
+    passkeys.canUsePasskeys.mockResolvedValueOnce(true);
+    passkeys.makePasskey.mockRejectedValueOnce(new Error("cancelled"));
+    click("panel-action");
+    await vi.waitFor(() => expect(panelText()).toContain("didn't go through"));
+    expect(JSON.parse(localStorage.getItem("3dx-play:v1") ?? "{}").room).toBe(savedCredential.room);
   });
 });

@@ -46,7 +46,7 @@ Next time, just open the page you saved. It works on Wi-Fi and on mobile data, w
 
 - **Only the game.** Your phone sees the 3DXChat window and hears the game's sound. Nothing else on your PC.
 - **Only game controls.** A phone can click inside the game, chat, and use a keyboard and controller made for it. No Windows, Alt or Ctrl keys, so no Alt+Tab, and all input stops the moment the game isn't in front.
-- **One phone.** A pairing link works once, for 15 minutes. The first phone to open it gets a key of its own, and the link stops working.
+- **One phone, and only you.** Making a pairing link takes Windows Hello on your PC. The link works once, for 15 minutes, and the phone that opens it makes a passkey. Every new connection then takes Face ID or your passcode, and your PC checks it itself. A lost phone can't connect without them, and a stolen link or key gets nothing.
 - **Encrypted end to end.** Picture, sound and controls are encrypted between your PC and your phone. They go straight between the two when they can, and through a Cloudflare relay when they can't. Cloudflare only ever sees sealed data.
 - **You'll know.** Your PC shows a notification whenever a phone connects, and a red dot on the tray icon for as long as it stays connected.
 - **Nothing about you.** No accounts, no analytics, no tracking, and the relay stores nothing. The only record of your sessions is a short log on your own PC. Your IP address does reach Cloudflare, which runs the page and the relay, as with any website.

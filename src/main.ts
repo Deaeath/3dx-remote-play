@@ -35,6 +35,7 @@ const hideCode = element<HTMLButtonElement>("hide-code");
 const newLink = element<HTMLButtonElement>("new-link");
 const pairNote = element("pair-note");
 const pairedBox = element("paired");
+const ownerNote = element("owner-note");
 const phoneName = element("phone-name");
 const forgetButton = element<HTMLButtonElement>("forget");
 const startupBox = element("startup");
@@ -79,7 +80,7 @@ const host = new RemotePlayHost(
 function render(): void {
   const pairing = snapshot.pairing;
   const enabled = pairing?.enabled ?? false;
-  const paired = Boolean(pairing?.deviceSecret);
+  const paired = Boolean(pairing?.deviceSecret && pairing.devicePasskey);
   const link = pairingLink(pairing);
   if (!link) codeShown = false;
 
@@ -118,11 +119,14 @@ function render(): void {
 
 async function whileBusy(work: () => Promise<void>): Promise<void> {
   busy = true;
+  ownerNote.hidden = true;
   render();
   try {
     await work();
   } catch (error) {
     console.warn("[remote play]", error);
+    ownerNote.textContent = String(error);
+    ownerNote.hidden = false;
   } finally {
     busy = false;
     render();
@@ -152,8 +156,10 @@ endButton.addEventListener("click", () => host.endSession());
 newLink.addEventListener("click", () => void whileBusy(() => host.newLink()));
 
 showCode.addEventListener("click", () => {
-  codeShown = true;
-  render();
+  void whileBusy(async () => {
+    await host.confirmOwner();
+    codeShown = true;
+  });
 });
 hideCode.addEventListener("click", () => {
   codeShown = false;

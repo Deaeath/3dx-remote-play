@@ -37,6 +37,9 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
+# Windows Hello, before a phone can be paired.
+windows = { version = "0.62", features = ["Security_Credentials_UI", "Win32_Foundation", "Win32_System_WinRT"] }
+windows-future = "0.3"
 # Game-only sound: Windows' per-process loopback.
 wasapi = "0.19"
 

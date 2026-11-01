@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { verifyRegistration } from "../shared/passkey";
+import { makeFakePasskey, type FakePasskey } from "./fakePasskey";
 import {
   createSecret,
   seal,
@@ -31,7 +33,7 @@ class FakeChannel {
     this.sent.push(message);
   }
   events() {
-    return this.sent.map((text) => JSON.parse(text) as { t: string; room?: string; secret?: string; game?: string; video?: boolean });
+    return this.sent.map((text) => JSON.parse(text) as { t: string; room?: string; secret?: string; challenge?: string; token?: string; game?: string; video?: boolean });
   }
 }
 
@@ -136,6 +138,7 @@ function harness(pairing: RemotePairing | null, game: Partial<NativeGameState> =
       return peer as unknown as RTCPeerConnection;
     },
     log: vi.fn(),
+    verifyOwner: vi.fn(async () => undefined),
   } satisfies HostDeps;
   const host = new RemotePlayHost(deps, (snapshot) => snapshots.push(snapshot), (name) => connected.push(name));
   return { host, deps, sockets, peers, snapshots, connected, saved, native, captured };
@@ -160,10 +163,32 @@ async function online(setup: Harness): Promise<FakeSocket> {
   return socket;
 }
 
+let phonePasskey: FakePasskey;
+
+beforeAll(async () => {
+  phonePasskey = await makeFakePasskey();
+});
+
+/** A phone on a link making its passkey, once the PC has asked. */
+async function finishLinkPairing(channel: FakeChannel): Promise<void> {
+  await vi.waitFor(() => expect(channel.events().some((event) => event.t === "pair")).toBe(true), WAIT);
+  const nonce = channel.events().find((event) => event.t === "pair")?.challenge ?? "";
+  channel.onmessage?.({ data: JSON.stringify({ t: "paired", passkey: await phonePasskey.register(nonce) }) });
+}
+
+/** A phone all the way into a session: signing with its passkey, or making one on a link. */
 async function connectPhone(setup: Harness, socket: FakeSocket, credential: PlayCredential): Promise<FakeChannel> {
+  const pairing = setup.host.snapshot().pairing;
+  const viaLink = credential.secret === pairing?.linkSecret;
   await sendOffer(socket, credential);
+  if (!viaLink) {
+    const challenge = await unseal(await signalKey(credential), "host", socket.sent.at(-1) ?? "");
+    if (challenge?.t !== "challenge") throw new Error("expected a challenge");
+    await sendOffer(socket, credential, { proof: await phonePasskey.prove(challenge.nonce, "phone-offer-sdp") });
+  }
   const channel = new FakeChannel();
   setup.peers.at(-1)?.ondatachannel?.({ channel });
+  if (viaLink) await finishLinkPairing(channel);
   await vi.waitFor(() => expect(channel.events().some((event) => event.t === "state")).toBe(true), WAIT);
   return channel;
 }
@@ -183,7 +208,9 @@ describe("Remote Play pairing state", () => {
   });
 
   it("accepts the paired phone's secret and an unexpired link", () => {
-    const pairing = { ...newPairing(true, 1000), deviceSecret: createSecret() };
+    const devicePasskey = { credentialId: "c", publicKey: "p" };
+    const pairing = { ...newPairing(true, 1000), deviceSecret: createSecret(), devicePasskey };
+    expect(acceptedCredentials({ ...pairing, devicePasskey: null }, 1000).map((c) => c.viaLink)).toEqual([true]);
     expect(acceptedCredentials(pairing, 1000).map((c) => c.viaLink)).toEqual([false, true]);
     expect(acceptedCredentials(pairing, 1000 + LINK_LIFETIME_MS + 1).map((c) => c.viaLink)).toEqual([false]);
   });
@@ -317,7 +344,9 @@ describe("Remote Play host", () => {
     const socket = await online(setup);
     await sendOffer(socket, linkCredential(pairing));
     expect(setup.deps.captureGame).not.toHaveBeenCalled();
-    setup.peers[0].ondatachannel?.({ channel: new FakeChannel() });
+    const channel = new FakeChannel();
+    setup.peers[0].ondatachannel?.({ channel });
+    await finishLinkPairing(channel);
     await vi.waitFor(() => expect(setup.peers[0].video.sender.replaceTrack).toHaveBeenCalledWith(setup.captured.track), WAIT);
     expect(setup.deps.captureGame).toHaveBeenCalledTimes(1);
     expect(setup.connected).toEqual(["iPhone"]);
@@ -327,7 +356,10 @@ describe("Remote Play host", () => {
     const pairing = pairingWith();
     const setup = harness(pairing);
     const socket = await online(setup);
-    const channel = await connectPhone(setup, socket, linkCredential(pairing));
+    await sendOffer(socket, linkCredential(pairing));
+    const channel = new FakeChannel();
+    setup.peers.at(-1)?.ondatachannel?.({ channel });
+    await vi.waitFor(() => expect(channel.events().some((event) => event.t === "pair")).toBe(true), WAIT);
 
     const pair = channel.events().find((event) => event.t === "pair");
     expect(pair?.secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -335,7 +367,8 @@ describe("Remote Play host", () => {
     expect(pair?.room).not.toBe(pairing.room);
     expect(setup.saved).toHaveLength(0);
 
-    channel.onmessage?.({ data: '{"t":"paired"}' });
+    channel.onmessage?.({ data: JSON.stringify({ t: "paired", passkey: await phonePasskey.register(pair?.challenge ?? "") }) });
+    await vi.waitFor(() => expect(setup.saved.length).toBeGreaterThan(0), WAIT);
     await flush();
     expect(setup.saved.at(-1)).toMatchObject({ room: pair?.room, linkSecret: null, linkExpiresAt: null, deviceSecret: pair?.secret, deviceName: "iPhone" });
 
@@ -353,6 +386,10 @@ describe("Remote Play host", () => {
     expect(setup.peers).toHaveLength(1);
 
     await sendOffer(next, { room: pair?.room ?? "", secret: pair?.secret ?? "" });
+    expect(setup.peers).toHaveLength(1);
+    const challenge = await unseal(await signalKey({ room: pair?.room ?? "", secret: pair?.secret ?? "" }), "host", next.sent.at(-1) ?? "");
+    if (challenge?.t !== "challenge") throw new Error("expected a challenge");
+    await sendOffer(next, { room: pair?.room ?? "", secret: pair?.secret ?? "" }, { proof: await phonePasskey.prove(challenge.nonce, "phone-offer-sdp") });
     expect(setup.peers).toHaveLength(2);
   });
 
@@ -360,7 +397,7 @@ describe("Remote Play host", () => {
     const pairing = pairingWith();
     const setup = harness(pairing);
     const socket = await online(setup);
-    await connectPhone(setup, socket, linkCredential(pairing));
+    await sendOffer(socket, linkCredential(pairing));
     setup.host.endSession();
     expect(setup.saved).toHaveLength(0);
     await sendOffer(socket, linkCredential(pairing));
@@ -369,7 +406,8 @@ describe("Remote Play host", () => {
 
   it("doesn't pair again for a phone that's already paired", async () => {
     const deviceSecret = createSecret();
-    const pairing = pairingWith({ linkSecret: null, linkExpiresAt: null, deviceSecret });
+    const devicePasskey = await verifyRegistration(await phonePasskey.register("n"), "n");
+    const pairing = pairingWith({ linkSecret: null, linkExpiresAt: null, deviceSecret, devicePasskey });
     const setup = harness(pairing);
     const socket = await online(setup);
     const channel = await connectPhone(setup, socket, { room: pairing.room, secret: deviceSecret });
@@ -602,6 +640,7 @@ describe("Remote Play host", () => {
     );
     const channel = new FakeChannel();
     setup.peers[0].ondatachannel?.({ channel });
+    await finishLinkPairing(channel);
     await vi.waitFor(() => expect(setup.peers[0].video.sender.setParameters).toHaveBeenCalled(), WAIT);
     channel.onclose?.();
     parametersSet();
@@ -610,7 +649,10 @@ describe("Remote Play host", () => {
   });
 
   it("captures one at a time, even across sessions", async () => {
-    const pairing = pairingWith();
+    const deviceSecret = createSecret();
+    const devicePasskey = await verifyRegistration(await phonePasskey.register("n"), "n");
+    const pairing = pairingWith({ linkSecret: null, linkExpiresAt: null, deviceSecret, devicePasskey });
+    const credential = { room: pairing.room, secret: deviceSecret };
     const setup = harness(pairing);
     const socket = await online(setup);
     const earlier = fakeStream();
@@ -621,11 +663,11 @@ describe("Remote Play host", () => {
           captured = () => resolve(earlier.stream);
         }),
     );
-    await connectPhone(setup, socket, linkCredential(pairing));
+    await connectPhone(setup, socket, credential);
     await vi.waitFor(() => expect(setup.deps.captureGame).toHaveBeenCalledTimes(1), WAIT);
 
     // The phone comes back while the first capture is still going.
-    await connectPhone(setup, socket, linkCredential(pairing));
+    await connectPhone(setup, socket, credential);
     await flush();
     expect(setup.deps.captureGame).toHaveBeenCalledTimes(1);
 
@@ -687,6 +729,7 @@ describe("Remote Play host", () => {
     });
     const channel = new FakeChannel();
     setup.peers[0].ondatachannel?.({ channel });
+    await finishLinkPairing(channel);
     await vi.waitFor(() => expect(setup.peers[0].video.sender.replaceTrack).toHaveBeenCalled(), WAIT);
     channel.onclose?.();
     const log = setup.deps.log.mock.calls.map(([line]) => line).join("\n");
@@ -721,5 +764,196 @@ describe("Remote Play host", () => {
     await setup.host.start();
     expect(setup.host.snapshot().pairing).toBeNull();
     expect(setup.sockets).toHaveLength(0);
+  });
+});
+
+describe("a paired phone proving it's the owner", () => {
+  const SDP = "phone-offer-sdp";
+
+  async function pairedSetup(extra: Partial<RemotePairing> = {}) {
+    const deviceSecret = createSecret();
+    const registered = await verifyRegistration(await phonePasskey.register("n"), "n");
+    const pairing = pairingWith({ linkSecret: null, linkExpiresAt: null, deviceSecret, deviceName: "iPhone", devicePasskey: registered, ...extra });
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    return { setup, socket, credential: { room: pairing.room, secret: deviceSecret } };
+  }
+
+  async function nonceFrom(socket: FakeSocket, credential: PlayCredential): Promise<string> {
+    const message = await unseal(await signalKey(credential), "host", socket.sent.at(-1) ?? "");
+    if (message?.t !== "challenge") throw new Error("not a challenge");
+    return message.nonce;
+  }
+
+  it("gets a challenge and nothing else from the secret alone: no answer, no address, no connection", async () => {
+    const { setup, socket, credential } = await pairedSetup();
+    await sendOffer(socket, credential);
+    expect(await nonceFrom(socket, credential)).toBeTruthy();
+    expect(setup.peers).toHaveLength(0);
+    expect(setup.deps.loadIceServers).not.toHaveBeenCalled();
+    expect(setup.deps.captureGame).not.toHaveBeenCalled();
+  });
+
+  it("connects once its passkey has signed for this offer", async () => {
+    const { setup, socket, credential } = await pairedSetup();
+    await sendOffer(socket, credential);
+    await sendOffer(socket, credential, { proof: await phonePasskey.prove(await nonceFrom(socket, credential), SDP) });
+    expect(setup.peers).toHaveLength(1);
+  });
+
+  it("refuses somebody else's passkey", async () => {
+    const { setup, socket, credential } = await pairedSetup();
+    const stranger = await makeFakePasskey();
+    await sendOffer(socket, credential);
+    await sendOffer(socket, credential, { proof: await stranger.prove(await nonceFrom(socket, credential), SDP) });
+    expect(setup.peers).toHaveLength(0);
+    expect(await nonceFrom(socket, credential)).toBeTruthy();
+  });
+
+  it("refuses a nonce used twice, so a proof can't be replayed", async () => {
+    const { setup, socket, credential } = await pairedSetup();
+    await sendOffer(socket, credential);
+    const proof = await phonePasskey.prove(await nonceFrom(socket, credential), SDP);
+    await sendOffer(socket, credential, { proof });
+    setup.host.endSession();
+    await sendOffer(socket, credential, { proof });
+    expect(setup.peers).toHaveLength(1);
+  });
+
+  it("refuses a proof carried over to a different offer", async () => {
+    const { setup, socket, credential } = await pairedSetup();
+    await sendOffer(socket, credential);
+    const proof = await phonePasskey.prove(await nonceFrom(socket, credential), SDP);
+    await sendOffer(socket, credential, { proof, sdp: "an-attackers-offer" });
+    expect(setup.peers).toHaveLength(0);
+  });
+
+  it("refuses a nonce that has expired", async () => {
+    const { setup, socket, credential } = await pairedSetup();
+    await sendOffer(socket, credential);
+    const proof = await phonePasskey.prove(await nonceFrom(socket, credential), SDP);
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 6 * 60_000);
+    await sendOffer(socket, credential, { proof, at: now + 6 * 60_000 });
+    expect(setup.peers).toHaveLength(0);
+  });
+
+  async function livePhone() {
+    const parts = await pairedSetup();
+    const channel = await connectPhone(parts.setup, parts.socket, parts.credential);
+    const token = channel.events().find((event) => event.t === "resume")?.token ?? "";
+    expect(token).not.toBe("");
+    return { ...parts, channel, token };
+  }
+
+  it("lets a phone back without the passkey after a dropped connection, but only once", async () => {
+    const { setup, socket, credential, channel, token } = await livePhone();
+    channel.onclose?.();
+    await sendOffer(socket, credential, { resume: token });
+    expect(setup.peers).toHaveLength(2);
+    setup.host.endSession("the connection failed");
+    await sendOffer(socket, credential, { resume: token });
+    expect(setup.peers).toHaveLength(2);
+  });
+
+  it("doesn't let a phone back without the passkey long after it dropped", async () => {
+    const { setup, socket, credential, channel, token } = await livePhone();
+    channel.onclose?.();
+    const later = Date.now() + 11 * 60_000;
+    vi.spyOn(Date, "now").mockReturnValue(later);
+    await sendOffer(socket, credential, { resume: token, at: later });
+    expect(setup.peers).toHaveLength(1);
+  });
+
+  it("wants the passkey again after the session is ended on the PC", async () => {
+    const { setup, socket, credential, token } = await livePhone();
+    setup.host.endSession();
+    await sendOffer(socket, credential, { resume: token });
+    expect(setup.peers).toHaveLength(1);
+  });
+
+  it("denies a phone paired before passkeys existed", async () => {
+    const { setup, socket, credential } = await pairedSetup({ devicePasskey: null });
+    await sendOffer(socket, credential);
+    expect(setup.peers).toHaveLength(0);
+    expect(JSON.parse(socket.sent.at(-1) ?? "{}")).toEqual({ relay: "denied" });
+  });
+});
+
+describe("a phone on a pairing link, before its passkey exists", () => {
+  async function pairingPhone() {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    await sendOffer(socket, linkCredential(pairing));
+    const channel = new FakeChannel();
+    setup.peers.at(-1)?.ondatachannel?.({ channel });
+    await vi.waitFor(() => expect(channel.events().some((event) => event.t === "pair")).toBe(true), WAIT);
+    return { setup, socket, channel, pairing };
+  }
+
+  it("gets no picture, no game state and no say over the PC", async () => {
+    const { setup, channel } = await pairingPhone();
+    for (const command of [{ t: "tap", x: 0.5, y: 0.5 }, { t: "focus" }, { t: "launch" }, { t: "key", key: "a", down: true }, { t: "report", text: "hi" }]) {
+      channel.onmessage?.({ data: JSON.stringify(command) });
+    }
+    await flush();
+    expect(setup.deps.captureGame).not.toHaveBeenCalled();
+    expect(setup.deps.input).not.toHaveBeenCalled();
+    expect(setup.deps.focusGame).not.toHaveBeenCalled();
+    expect(setup.deps.launchGame).not.toHaveBeenCalled();
+    expect(channel.events().some((event) => event.t === "state")).toBe(false);
+    expect(setup.host.snapshot().session?.live).toBe(false);
+  });
+
+  it("goes live once a real passkey is made, keeping only its public half", async () => {
+    const { setup, channel } = await pairingPhone();
+    const challenge = channel.events().find((event) => event.t === "pair")?.challenge ?? "";
+    channel.onmessage?.({ data: JSON.stringify({ t: "paired", passkey: await phonePasskey.register(challenge) }) });
+    await vi.waitFor(() => expect(setup.deps.captureGame).toHaveBeenCalled(), WAIT);
+    expect(Object.keys(setup.saved.at(-1)?.devicePasskey ?? {}).sort()).toEqual(["credentialId", "publicKey"]);
+    expect(setup.connected).toEqual(["iPhone"]);
+  });
+
+  it("ends the session on a passkey made for something else, and saves nothing", async () => {
+    const { setup, channel } = await pairingPhone();
+    channel.onmessage?.({ data: JSON.stringify({ t: "paired", passkey: await phonePasskey.register("not-the-challenge") }) });
+    await vi.waitFor(() => expect(setup.host.snapshot().session).toBeNull(), WAIT);
+    expect(setup.saved).toHaveLength(0);
+    expect(setup.deps.captureGame).not.toHaveBeenCalled();
+  });
+});
+
+describe("Windows Hello on the PC", () => {
+  it("is needed to turn Remote Play on, and refusing changes nothing", async () => {
+    const setup = harness(null);
+    await setup.host.start();
+    setup.deps.verifyOwner.mockRejectedValueOnce(new Error("no"));
+    await expect(setup.host.setEnabled(true)).rejects.toThrow("no");
+    expect(setup.saved).toHaveLength(0);
+    expect(setup.sockets).toHaveLength(0);
+  });
+
+  it("is needed for a new link, and refusing leaves the paired phone paired", async () => {
+    const pairing = pairingWith({ deviceSecret: createSecret() });
+    const setup = harness(pairing);
+    await setup.host.start();
+    setup.deps.verifyOwner.mockRejectedValueOnce(new Error("no"));
+    await expect(setup.host.newLink()).rejects.toThrow("no");
+    expect(setup.saved).toHaveLength(0);
+  });
+
+  it("isn't needed to start up, or to turn off", async () => {
+    const setup = harness(pairingWith());
+    await setup.host.start();
+    await setup.host.setEnabled(false);
+    expect(setup.deps.verifyOwner).not.toHaveBeenCalled();
+  });
+
+  it("doesn't ask twice in a row", async () => {
+    const setup = harness(null);
+    await setup.host.setEnabled(true);
+    await setup.host.confirmOwner();
+    expect(setup.deps.verifyOwner).toHaveBeenCalledOnce();
   });
 });

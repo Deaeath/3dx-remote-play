@@ -46,7 +46,7 @@ const TITLE_RESTORE_PAUSE: Duration = Duration::from_secs(1);
 const TITLE_RESTORE_TRIES: u32 = 300;
 
 const PAIRING_FILE: &str = "remote_play.pairing";
-const MAX_PAIRING_LEN: usize = 1024;
+const MAX_PAIRING_LEN: usize = 8192;
 /// Where 3DXChat was last seen running, so the phone can start it again.
 const GAME_PATH_FILE: &str = "remote_play_game.txt";
 /// The launcher starts the game with this.
@@ -214,6 +214,13 @@ pub fn remote_play_input(state: State<'_, RemotePlayState>, input: PlayInput) ->
     }
     run(actions);
     Ok(())
+}
+
+/// Windows Hello, so someone at an unlocked PC can't quietly pair their own phone.
+#[tauri::command]
+pub async fn remote_play_verify_owner(window: tauri::WebviewWindow) -> Result<(), String> {
+    let handle = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
+    off_main_thread(move || win::verify_owner(handle)).await?
 }
 
 #[tauri::command]
@@ -495,6 +502,33 @@ mod win {
         }
     }
 
+    pub fn verify_owner(handle: isize) -> Result<(), String> {
+        use windows::core::{factory, HSTRING};
+        use windows::Security::Credentials::UI::{UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability};
+        use windows::Win32::Foundation::HWND as WinHwnd;
+        use windows::Win32::System::WinRT::IUserConsentVerifierInterop;
+        use windows_future::IAsyncOperation;
+
+        const NOT_SET_UP: &str = "Set up a Windows PIN first, in Settings, Accounts, Sign-in options. It keeps anyone else at this PC from pairing their own phone.";
+        let failed = |error: windows::core::Error| format!("Windows Hello didn't start: {error}");
+
+        let available = UserConsentVerifier::CheckAvailabilityAsync().and_then(|check| check.join()).map_err(failed)?;
+        if available != UserConsentVerifierAvailability::Available {
+            return Err(NOT_SET_UP.to_string());
+        }
+        let interop = factory::<UserConsentVerifier, IUserConsentVerifierInterop>().map_err(failed)?;
+        let message = HSTRING::from("Confirm it's you to pair a phone with 3DX Remote Play");
+        let result = unsafe {
+            let request: IAsyncOperation<UserConsentVerificationResult> = interop.RequestVerificationForWindowAsync(WinHwnd(handle as *mut _), &message).map_err(failed)?;
+            request.join().map_err(failed)?
+        };
+        if result == UserConsentVerificationResult::Verified {
+            Ok(())
+        } else {
+            Err("Windows didn't confirm it's you, so nothing changed.".to_string())
+        }
+    }
+
     pub fn set_title(handle: isize, title: &str) -> bool {
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
         let mut result = 0usize;
@@ -608,6 +642,10 @@ mod win {
     use super::Action;
 
     pub fn inject(_actions: &[Action]) {}
+
+    pub fn verify_owner(_handle: isize) -> Result<(), String> {
+        Err("Windows Hello needs Windows".to_string())
+    }
 
     pub fn set_title(_handle: isize, _title: &str) -> bool {
         false

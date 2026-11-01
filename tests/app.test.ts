@@ -35,6 +35,7 @@ vi.mock("../src/host", async (importOriginal) => {
     async newLink() {
       state.newLinks += 1;
     }
+    async confirmOwner() {}
     endSession() {}
   }
   return { ...actual, RemotePlayHost: FakeHost };
@@ -74,10 +75,10 @@ describe("the app window", () => {
     await vi.waitFor(() => expect(toggle.disabled).toBe(false));
 
     (document.getElementById("show-code") as HTMLButtonElement).click();
-    expect((document.getElementById("qr") as HTMLElement).querySelector("svg")).not.toBeNull();
+    await vi.waitFor(() => expect((document.getElementById("qr") as HTMLElement).querySelector("svg")).not.toBeNull());
 
     state.listener?.({
-      pairing: { enabled: true, room: "r", linkSecret: null, linkExpiresAt: null, deviceSecret: "s", deviceName: "iPhone" },
+      pairing: { enabled: true, room: "r", linkSecret: null, linkExpiresAt: null, deviceSecret: "s", devicePasskey: { credentialId: "c", publicKey: "p" }, deviceName: "iPhone" },
       relay: "online",
       session: null,
     });

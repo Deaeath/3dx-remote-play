@@ -35,6 +35,7 @@ import {
   type PlayState,
   type SignalMessage,
 } from "../shared/remotePlay";
+import { verifyProof, verifyRegistration, type PairedPasskey, type PasskeyRegistration } from "../shared/passkey";
 
 /** An unused link dies after this, so one left on screen doesn't stay a way in. */
 export const LINK_LIFETIME_MS = 15 * 60_000;
@@ -53,6 +54,13 @@ const MAX_REPORT_LENGTH = 300;
 /** A good 1080p picture without eating a phone's data plan: about 2 GB an hour. */
 const MAX_VIDEO_BITRATE = 5_000_000;
 const START_VIDEO_KBPS = 2500;
+/** How long a phone gets to sign a nonce. */
+const NONCE_LIFETIME_MS = 5 * 60_000;
+/** How long after a dropped connection a phone may come back without the passkey. */
+const RESUME_LIFETIME_MS = 10 * 60_000;
+/** Turning on and then showing the code shouldn't ask twice. */
+const OWNER_CHECK_LASTS_MS = 2 * 60_000;
+const ENDED_ON_THIS_PC = "ended on this PC";
 const CRLF = "\r\n";
 const VIDEO_CODECS = ["H264", "VP8", "VP9", "AV1"];
 const MAX_FRAME_RATE = 60;
@@ -69,6 +77,8 @@ export interface RemotePairing {
   /** The paired phone's own secret. */
   deviceSecret: string | null;
   deviceName: string | null;
+  /** The public half of the phone's passkey. A phone needs this and its secret. */
+  devicePasskey: PairedPasskey | null;
 }
 
 export interface NativeGameState {
@@ -97,6 +107,8 @@ export interface HostDeps {
   createPeer(config: RTCConfiguration): RTCPeerConnection;
   /** A line for the log on this PC. Never an address or a secret. */
   log(line: string): void;
+  /** Windows Hello: rejects, saying why, unless the owner of this PC confirms. */
+  verifyOwner(): Promise<void>;
 }
 
 export interface HostSnapshot {
@@ -122,6 +134,7 @@ export function newPairing(enabled: boolean, now = Date.now()): RemotePairing {
     linkExpiresAt: now + LINK_LIFETIME_MS,
     deviceSecret: null,
     deviceName: null,
+    devicePasskey: null,
   };
 }
 
@@ -133,7 +146,7 @@ export function pairingLink(pairing: RemotePairing | null, now = Date.now()): st
 /** The secrets a phone may be holding right now, the paired phone's first. */
 export function acceptedCredentials(pairing: RemotePairing, now = Date.now()): (PlayCredential & { viaLink: boolean })[] {
   const accepted: (PlayCredential & { viaLink: boolean })[] = [];
-  if (pairing.deviceSecret) accepted.push({ room: pairing.room, secret: pairing.deviceSecret, viaLink: false });
+  if (pairing.deviceSecret && pairing.devicePasskey) accepted.push({ room: pairing.room, secret: pairing.deviceSecret, viaLink: false });
   if (pairing.linkSecret && (pairing.linkExpiresAt ?? 0) > now) {
     accepted.push({ room: pairing.room, secret: pairing.linkSecret, viaLink: true });
   }
@@ -213,10 +226,13 @@ interface Session {
   name: string;
   viaLink: boolean;
   live: boolean;
+  /** False until a phone on a pairing link has made its passkey: no picture, no input. */
+  authed: boolean;
+  channelOpened: boolean;
   stream: MediaStream | null;
   stopAudio: (() => void) | null;
   /** The new room and secret sent to the phone, kept until it confirms saving them. */
-  pending: PlayCredential | null;
+  pending: (PlayCredential & { challenge: string }) | null;
   poll: ReturnType<typeof setInterval> | null;
   nextCaptureAt: number;
   nextVideoLogAt: number;
@@ -238,6 +254,9 @@ export class RemotePlayHost {
    * then opens its window picker on the PC.
    */
   private capturing = false;
+  private nonce: { value: string; expiresAt: number } | null = null;
+  private resume: { token: string; expiresAt: number } | null = null;
+  private ownerCheckedAt = 0;
   private reconnectDelay = RECONNECT_MIN_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -276,12 +295,21 @@ export class RemotePlayHost {
     this.goOffline();
   }
 
+  /** The person at this PC really is its owner. Throws, saying why, if not. */
+  async confirmOwner(): Promise<void> {
+    if (Date.now() - this.ownerCheckedAt < OWNER_CHECK_LASTS_MS) return;
+    await this.deps.verifyOwner();
+    this.ownerCheckedAt = Date.now();
+  }
+
   async setEnabled(enabled: boolean): Promise<void> {
+    if (enabled) await this.confirmOwner();
     const pairing = this.pairing ?? newPairing(enabled);
     await this.store({ ...pairing, enabled });
     if (enabled) {
       await this.goOnline();
     } else {
+      this.resume = null;
       this.endSession("Remote Play was turned off");
       this.goOffline();
     }
@@ -289,17 +317,22 @@ export class RemotePlayHost {
 
   /** A fresh link. Any phone paired before is out, on a new room. */
   async newLink(): Promise<void> {
+    await this.confirmOwner();
     const enabled = this.pairing?.enabled ?? false;
+    this.nonce = null;
+    this.resume = null;
     this.endSession("a new link was made");
     this.goOffline();
     await this.store(newPairing(enabled));
     if (enabled) await this.goOnline();
   }
 
-  endSession(reason = "ended on this PC"): void {
+  endSession(reason = ENDED_ON_THIS_PC): void {
     const session = this.session;
     if (!session) return;
     this.session = null;
+    // Coming back after a dropped network shouldn't ask again; being ended here should.
+    if (this.resume) this.resume = reason === ENDED_ON_THIS_PC ? null : { ...this.resume, expiresAt: Date.now() + RESUME_LIFETIME_MS };
     this.deps.log(`session over after ${Math.round((Date.now() - session.openedAt) / 1000)} s: ${reason}`);
     if (session.poll !== null) clearInterval(session.poll);
     session.stopAudio?.();
@@ -378,7 +411,7 @@ export class RemotePlayHost {
       const message = await unseal(key, "phone", text);
       if (message?.t === "offer") {
         // Stale means a replay or a phone with the wrong clock, not a stranger.
-        if (isFreshOffer(message.at)) await this.openSession(message, credential.viaLink, key);
+        if (isFreshOffer(message.at)) await (credential.viaLink ? this.openSession(message, true, key) : this.admit(message, key));
         else this.deps.log("ignored an old offer: a replay, or a phone with the wrong clock");
         return;
       }
@@ -386,6 +419,31 @@ export class RemotePlayHost {
     // Wrong secret: an old link, or a phone that was forgotten. Tell it plainly.
     this.deps.log("refused a message sealed with the wrong secret");
     this.socket?.send(JSON.stringify({ relay: "denied" }));
+  }
+
+  /**
+   * A paired phone gets no answer, and so no address and no connection, until
+   * its passkey has signed for this very offer.
+   */
+  private async admit(offer: Extract<SignalMessage, { t: "offer" }>, key: CryptoKey): Promise<void> {
+    const { proof, resume } = offer;
+    if (resume && this.resume?.token === resume && Date.now() < this.resume.expiresAt) {
+      this.resume = null;
+      await this.openSession(offer, false, key);
+      return;
+    }
+    const nonce = this.nonce;
+    const passkey = this.pairing?.devicePasskey;
+    if (proof && nonce && passkey && Date.now() < nonce.expiresAt) {
+      this.nonce = null;
+      if (await verifyProof(proof, passkey, nonce.value, offer.sdp)) {
+        await this.openSession(offer, false, key);
+        return;
+      }
+      this.deps.log("refused a passkey that didn't check out");
+    }
+    this.nonce = { value: createSecret(), expiresAt: Date.now() + NONCE_LIFETIME_MS };
+    this.socket?.send(await seal(key, "host", { t: "challenge", nonce: this.nonce.value }));
   }
 
   private async openSession(offer: Extract<SignalMessage, { t: "offer" }>, viaLink: boolean, key: CryptoKey): Promise<void> {
@@ -426,6 +484,8 @@ export class RemotePlayHost {
       name: name.slice(0, 40),
       viaLink,
       live: false,
+      authed: !viaLink,
+      channelOpened: false,
       stream: null,
       stopAudio: null,
       pending: null,
@@ -471,14 +531,22 @@ export class RemotePlayHost {
   }
 
   private async onChannelOpen(session: Session): Promise<void> {
-    if (session.live || this.session !== session) return;
-    session.live = true;
+    if (session.channelOpened || this.session !== session) return;
+    session.channelOpened = true;
     this.deps.log(`connected after ${Date.now() - session.openedAt} ms`);
     void this.logPath(session);
+    if (session.authed) await this.goLive(session);
+    else this.beginPairing(session);
+  }
+
+  /** Only now does the phone get the game. */
+  private async goLive(session: Session): Promise<void> {
+    session.live = true;
     this.emit();
     this.onPhoneConnected(session.name);
     void this.deps.keepAwake(true, true).catch(() => undefined);
-    if (session.viaLink) this.beginPairing(session);
+    this.resume = { token: createSecret(), expiresAt: Number.POSITIVE_INFINITY };
+    this.sendEvent(session, { t: "resume", token: this.resume.token });
     await this.deps.focusGame().catch(() => undefined);
     if (this.session !== session) return;
     session.poll = setInterval(() => void this.refreshGame(session), STATE_POLL_MS);
@@ -505,15 +573,22 @@ export class RemotePlayHost {
     });
   }
 
-  /** Swap the one-time link for a room and secret only this phone holds. */
+  /** Swap the one-time link for a room, a secret and a passkey only this phone holds. */
   private beginPairing(session: Session): void {
-    session.pending = { room: createRoom(), secret: createSecret() };
+    session.pending = { room: createRoom(), secret: createSecret(), challenge: createSecret() };
     this.sendEvent(session, { t: "pair", ...session.pending });
   }
 
-  private async finishPairing(session: Session): Promise<void> {
+  private async finishPairing(session: Session, registration: PasskeyRegistration): Promise<void> {
     const pending = session.pending;
     if (!pending || !this.pairing) return;
+    const passkey = await verifyRegistration(registration, pending.challenge);
+    if (this.session !== session) return;
+    if (!passkey) {
+      this.deps.log("refused a passkey that didn't check out while pairing");
+      this.endSession("pairing failed");
+      return;
+    }
     session.pending = null;
     await this.store({
       ...this.pairing,
@@ -522,11 +597,15 @@ export class RemotePlayHost {
       linkExpiresAt: null,
       deviceSecret: pending.secret,
       deviceName: session.name,
+      devicePasskey: passkey,
     });
     // Whoever has the old link now reaches an empty room. This session is
     // direct, so leaving the relay doesn't touch it.
     this.dropSocket();
     await this.goOnline();
+    if (this.session !== session) return;
+    session.authed = true;
+    await this.goLive(session);
   }
 
   private sendEvent(session: Session, event: HostEvent): void {
@@ -622,8 +701,9 @@ export class RemotePlayHost {
     if (this.session !== session) return;
     const command = parseCommand(text);
     if (!command) return;
-    if (command.t === "paired") {
-      await this.finishPairing(session);
+    if (!session.authed) {
+      // A phone mid-pairing can do exactly one thing: finish pairing.
+      if (command.t === "paired") await this.finishPairing(session, command.passkey);
     } else if (command.t === "focus") {
       await this.deps.focusGame().catch(() => undefined);
       await this.refreshGame(session);
@@ -723,6 +803,7 @@ export const realHostDeps: HostDeps = {
   launchGame: () => invoke("remote_play_launch_game"),
   input: (input) => invoke("remote_play_input", { input }),
   releaseInput: () => invoke("remote_play_release"),
+  verifyOwner: () => invoke("remote_play_verify_owner"),
   keepAwake: (system, display) => invoke("remote_play_keep_awake", { system, display }),
   captureGame,
   startAudio,

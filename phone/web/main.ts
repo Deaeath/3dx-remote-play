@@ -21,9 +21,11 @@ import {
   type PlayState,
   type SavedCredential,
 } from "../../shared/remotePlay";
+import type { PasskeyProof } from "../../shared/passkey";
 import { Controller } from "./controller";
 import { Gestures, pictureRect, toGamePoint, type Rect } from "./controls";
 import { buildKeyboard, buildPad } from "./panels";
+import { canUsePasskeys, makePasskey, provePasskey } from "./passkeys";
 
 declare const __PAGE_VERSION__: string;
 
@@ -34,6 +36,10 @@ const RELAY_WAIT_MS = 15_000;
 const ANSWER_WAIT_MS = 20_000;
 /** Longer than a slow network needs, shorter than Safari takes to give up by itself. */
 const PATH_WAIT_MS = 25_000;
+/** Shorter than the PC keeps its nonce, so an Unlock left waiting never fails. */
+const UNLOCK_WAIT_MS = 4 * 60_000;
+/** One refusal can just mean the PC restarted. Two means it doesn't know this passkey. */
+const MAX_PROOF_REJECTIONS = 2;
 const RETRY_MS = 2000;
 const PING_MS = 25_000;
 const STATS_MS = 2000;
@@ -48,6 +54,7 @@ const STUCK = {
   answer: "Your PC isn't answering. Check that 3DX Remote Play is running on it. Still trying.",
   path: "Your phone and PC can't reach each other right now. Still trying.",
   page: "Something went wrong on this phone. Still trying.",
+  unlock: "Still waiting for you to unlock.",
 };
 const MAGNIFIED = 2;
 const CHAT_CLOSE_MS = 200;
@@ -77,6 +84,15 @@ let remoteStream: MediaStream | null = null;
 let credential: PlayCredential | null = null;
 /** Connecting with a link rather than this phone's own credential. */
 let viaLink = false;
+let passkeyId: string | null = null;
+/** Only ever in memory: closing the page means the passkey again. */
+let resumeToken: string | null = null;
+/** The new room and secret, until this phone's passkey exists. */
+let pendingPair: (PlayCredential & { challenge: string }) | null = null;
+/** The offer ready to go, and whether a passkey has already signed for it. */
+let readySdp = "";
+let proofSent = false;
+let proofRejections = 0;
 let signal: CryptoKey | null = null;
 let iceServers: RTCIceServer[] = STUN;
 let relay: WebSocket | null = null;
@@ -346,6 +362,10 @@ async function onRelayMessage(text: string): Promise<void> {
   const connection = peer;
   if (!signal || !connection) return;
   const message = await unseal(signal, "host", text);
+  if (message?.t === "challenge" && connection === peer) {
+    await onChallenge(connection, message.nonce);
+    return;
+  }
   if (message?.t !== "answer" || connection !== peer) return;
   // A slow PC's answer to the last attempt would break this one.
   if (message.to !== undefined && message.to !== offerAt) return;
@@ -355,6 +375,32 @@ async function onRelayMessage(text: string): Promise<void> {
   await connection.setRemoteDescription({ type: "answer", sdp: message.sdp }).catch((error: unknown) => {
     if (connection === peer) attemptFailed("page", String(error));
   });
+}
+
+/** The PC wants the passkey. On most phones that takes a tap, so offer one if asking outright fails. */
+async function onChallenge(connection: RTCPeerConnection, nonce: string): Promise<void> {
+  resumeToken = null;
+  if (proofSent) proofRejections += 1;
+  proofSent = false;
+  if (proofRejections >= MAX_PROOF_REJECTIONS || !passkeyId) {
+    wanted = false;
+    disconnect();
+    showPanel(null, "Your PC doesn't know this phone", "Open Remote Play on your PC and make a new link.");
+    return;
+  }
+  const unlock = async (): Promise<void> => {
+    if (connection !== peer || !passkeyId) return;
+    try {
+      const proof = await provePasskey(passkeyId, nonce, readySdp);
+      proofSent = true;
+      await sendOffer(connection, { proof });
+    } catch {
+      if (connection !== peer) return;
+      giveUpAfter(UNLOCK_WAIT_MS, "unlock");
+      showPanel("connection", "Unlock to play", "Confirm it's you, and your PC will connect.", { label: "Unlock", run: () => void unlock() });
+    }
+  };
+  await unlock();
 }
 
 function iceGathered(connection: RTCPeerConnection): Promise<void> {
@@ -413,10 +459,16 @@ async function startPeer(): Promise<void> {
   await connection.setLocalDescription(await connection.createOffer());
   await iceGathered(connection);
   if (connection !== peer || !signal) return;
-  const sdp = connection.localDescription?.sdp ?? "";
-  phoneRoutes = routeKinds(sdp);
+  readySdp = connection.localDescription?.sdp ?? "";
+  phoneRoutes = routeKinds(readySdp);
+  proofSent = false;
+  await sendOffer(connection, viaLink ? {} : { resume: resumeToken ?? undefined });
+}
+
+async function sendOffer(connection: RTCPeerConnection, extra: { proof?: PasskeyProof; resume?: string }): Promise<void> {
+  if (connection !== peer || !signal) return;
   const at = Date.now();
-  const sealed = await seal(signal, "phone", { t: "offer", sdp, at, name: deviceName(), note: offerNote() });
+  const sealed = await seal(signal, "phone", { t: "offer", sdp: readySdp, at, name: deviceName(), note: offerNote(), ...extra });
   if (connection !== peer || relay?.readyState !== WebSocket.OPEN) return;
   offerAt = at;
   relay.send(sealed);
@@ -426,6 +478,7 @@ async function startPeer(): Promise<void> {
 
 function onChannelOpen(): void {
   failures = 0;
+  proofRejections = 0;
   stuckHint = "";
   clearAttemptTimer();
   // Only needed again if this connection drops.
@@ -449,15 +502,37 @@ function onHostEvent(text: string): void {
   if (event.t === "pair") {
     const paired = { room: event.room, secret: event.secret };
     if (!isCredential(paired)) return;
-    const saved: SavedCredential = { ...paired, usedLink: credential?.room };
-    credential = paired;
+    pendingPair = { ...paired, challenge: event.challenge };
+    showPanel("connection", "Secure this phone", "Only this phone will be able to connect, and only once it knows it's you.", { label: "Secure with Face ID or passcode", run: () => void securePhone() });
+  } else if (event.t === "resume") {
+    resumeToken = event.token;
+  } else if (event.t === "state") {
+    showGameState(event);
+  }
+}
+
+/** Runs inside a tap, or phones won't make a passkey. */
+async function securePhone(): Promise<void> {
+  const pair = pendingPair;
+  if (!pair) return;
+  if (!(await canUsePasskeys())) {
+    showPanel("connection", "Set a passcode first", "This phone needs a screen lock to keep your game safe. Set one in its settings, then try again.", { label: "Try again", run: () => void securePhone() });
+    return;
+  }
+  try {
+    const passkey = await makePasskey(pair.challenge);
+    const saved: SavedCredential = { room: pair.room, secret: pair.secret, usedLink: credential?.room, passkey: passkey.credentialId };
+    pendingPair = null;
+    credential = { room: pair.room, secret: pair.secret };
     viaLink = false;
+    passkeyId = passkey.credentialId;
     localStorage.setItem(STORE_KEY, JSON.stringify(saved));
     // The link did its job; don't leave it in the address bar or history.
     history.replaceState(null, "", location.pathname);
-    send({ t: "paired" });
-  } else if (event.t === "state") {
-    showGameState(event);
+    send({ t: "paired", passkey });
+    showPanel("game", "Starting the picture", "Getting 3DXChat ready...");
+  } catch {
+    showPanel("connection", "Secure this phone", "That didn't go through. Only this phone will be able to connect, and only once it knows it's you.", { label: "Try again", run: () => void securePhone() });
   }
 }
 
@@ -650,6 +725,7 @@ element("end-button").addEventListener("click", () => {
   disconnect();
   void wakeLock?.release().catch(() => undefined);
   wakeLock = null;
+  resumeToken = null;
   showPanel(null, "Session ended", "Your PC stays ready for next time.", { label: "Play again", run: start });
 });
 
@@ -660,6 +736,7 @@ function start(): void {
   if (!credential) return;
   wanted = true;
   failures = 0;
+  proofRejections = 0;
   stuckHint = "";
   remoteStream ??= new MediaStream();
   picture.srcObject = remoteStream;
@@ -696,9 +773,17 @@ function boot(): void {
     return;
   }
   const link = parseLinkFragment(location.hash);
-  credential = credentialToUse(link, storedCredential());
+  const stored = storedCredential();
+  credential = credentialToUse(link, stored);
   const fromLink = credential === link ? link : null;
   viaLink = fromLink !== null;
+  passkeyId = viaLink ? null : (stored?.passkey ?? null);
+  resumeToken = null;
+  if (credential && !viaLink && !passkeyId) {
+    credential = null;
+    showPanel(null, "Pair this phone again", "Remote Play now locks with Face ID or your passcode. Open Remote Play on your PC and make a new link.");
+    return;
+  }
   if (!credential) {
     showPanel(null, "3DX Remote Play", "Play 3DXChat on your phone. Install 3DX Remote Play on your PC and scan the code it shows.", undefined, true);
     return;

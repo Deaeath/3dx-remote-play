@@ -9,6 +9,9 @@
 // server. So the relay can't read or forge a message, and the PC only ever
 // answers someone who holds the secret. See REMOTE-PLAY.md.
 
+// A type only: passkey.ts needs the helpers here, not the other way round.
+import type { PasskeyProof, PasskeyRegistration } from "./passkey";
+
 /** The public home of the phone page and the relay. */
 export const PLAY_ORIGIN = "https://3dx-play.pages.dev";
 
@@ -51,11 +54,11 @@ function fromBase64(text: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-function toBase64Url(bytes: Uint8Array): string {
+export function toBase64Url(bytes: Uint8Array): string {
   return toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function fromBase64Url(text: string): Uint8Array<ArrayBuffer> {
+export function fromBase64Url(text: string): Uint8Array<ArrayBuffer> {
   return fromBase64(text.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(text.length / 4) * 4, "="));
 }
 
@@ -91,7 +94,7 @@ export function parseLinkFragment(fragment: string): PlayCredential | null {
 }
 
 /** What a phone keeps after pairing: its own room and secret, and which link it paired with. */
-export type SavedCredential = PlayCredential & { usedLink?: string };
+export type SavedCredential = PlayCredential & { usedLink?: string; passkey?: string };
 
 /**
  * What a phone connects with. A Home Screen copy of the page always opens at
@@ -117,9 +120,12 @@ export async function signalKey({ room, secret }: PlayCredential): Promise<Crypt
 /** What the two sides exchange through the relay. */
 export type SignalMessage =
   // `note`: how this phone's last attempt went, for the PC's log.
-  | { t: "offer"; sdp: string; at: number; name: string; note?: string }
+  // `proof` or `resume`: what gets a paired phone an answer. Without either, it gets a challenge.
+  | { t: "offer"; sdp: string; at: number; name: string; note?: string; proof?: PasskeyProof; resume?: string }
   // `to`: the `at` of the offer this answers, so a late answer can't land on a newer attempt.
-  | { t: "answer"; sdp: string; to?: number };
+  | { t: "answer"; sdp: string; to?: number }
+  // The PC's one-time nonce for the passkey to sign.
+  | { t: "challenge"; nonce: string };
 
 /** The sender is bound in, so a message can't be bounced back at its author. */
 function additionalData(from: PlayRole): Uint8Array<ArrayBuffer> {
@@ -138,7 +144,8 @@ export async function seal(key: CryptoKey, from: PlayRole, message: SignalMessag
 
 function isSignalMessage(value: unknown): value is SignalMessage {
   if (typeof value !== "object" || value === null) return false;
-  const message = value as Partial<Record<"t" | "sdp" | "at" | "name", unknown>>;
+  const message = value as Partial<Record<"t" | "sdp" | "at" | "name" | "nonce", unknown>>;
+  if (message.t === "challenge") return typeof message.nonce === "string";
   if (typeof message.sdp !== "string") return false;
   if (message.t === "answer") return true;
   return message.t === "offer" && typeof message.at === "number" && typeof message.name === "string";
@@ -195,7 +202,7 @@ export type PlayInput =
   | { t: "chat"; text: string };
 
 /** Phone → PC over the data channel. */
-export type PhoneCommand = PlayInput | { t: "focus" } | { t: "launch" } | { t: "paired" } | { t: "report"; text: string };
+export type PhoneCommand = PlayInput | { t: "focus" } | { t: "launch" } | { t: "paired"; passkey: PasskeyRegistration } | { t: "report"; text: string };
 
 /** "frozen": running, but not answering Windows (hung). */
 export type GamePhase = "closed" | "frozen" | "background" | "front";
@@ -211,7 +218,8 @@ export interface PlayState {
 }
 
 /** PC → phone over the data channel. */
-export type HostEvent = ({ t: "state" } & PlayState) | ({ t: "pair" } & PlayCredential);
+// `resume`: lets this page reconnect after a dropped network without asking for the passkey again.
+export type HostEvent = ({ t: "state" } & PlayState) | ({ t: "pair"; challenge: string } & PlayCredential) | { t: "resume"; token: string };
 
 export const REMOTE_PLAY_INPUTS: readonly string[] = ["tap", "point", "button", "look", "wheel", "press", "key", "chat"];
 
