@@ -190,6 +190,8 @@ export type PlayInput =
   | { t: "look"; dx: number; dy: number }
   | { t: "wheel"; ticks: number }
   | { t: "press"; key: PlayKey }
+  // Held like a real key. `keyboard_key` in src-tauri/src/remote_input.rs says which exist.
+  | { t: "key"; key: string; down: boolean }
   | { t: "chat"; text: string };
 
 /** Phone → PC over the data channel. */
@@ -211,7 +213,7 @@ export interface PlayState {
 /** PC → phone over the data channel. */
 export type HostEvent = ({ t: "state" } & PlayState) | ({ t: "pair" } & PlayCredential);
 
-export const REMOTE_PLAY_INPUTS: readonly string[] = ["tap", "point", "button", "look", "wheel", "press", "chat"];
+export const REMOTE_PLAY_INPUTS: readonly string[] = ["tap", "point", "button", "look", "wheel", "press", "key", "chat"];
 
 /** How the relay closes a socket when another one takes its place in the room. */
 export const RELAY_REPLACED_CODE = 4000;

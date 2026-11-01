@@ -21,7 +21,9 @@ import {
   type PlayState,
   type SavedCredential,
 } from "../../shared/remotePlay";
+import { Controller } from "./controller";
 import { Gestures, pictureRect, toGamePoint, type Rect } from "./controls";
+import { buildKeyboard, buildPad } from "./panels";
 
 declare const __PAGE_VERSION__: string;
 
@@ -36,6 +38,7 @@ const RETRY_MS = 2000;
 const PING_MS = 25_000;
 const STATS_MS = 2000;
 const DETAIL_MS = 1000;
+const CONTROLLER_TICK_MS = 33;
 /** Tell the PC what this phone really sees: soon after starting, then now and then. */
 const REPORT_FIRST_TICK = 3;
 const REPORT_EVERY_TICKS = 15;
@@ -169,6 +172,7 @@ function setLive(value: boolean): void {
   if (!value) {
     gestures.cancel();
     closeChat();
+    openPanel(null);
     badge.textContent = "";
   }
 }
@@ -580,10 +584,50 @@ chatForm.addEventListener("submit", (event) => {
 // Dismissing the keyboard closes the bar. The wait lets a tap on Send land first.
 chatInput.addEventListener("blur", () => setTimeout(closeChat, CHAT_CLOSE_MS));
 
-element("camera-button").addEventListener("click", () => {
+function nextCamera(): void {
   send({ t: "press", key: CAMERA_KEYS[cameraIndex] });
   cameraIndex = (cameraIndex + 1) % CAMERA_KEYS.length;
-});
+}
+
+element("camera-button").addEventListener("click", nextCamera);
+
+const keyboardPanel = element("keyboard");
+const padPanel = element("pad");
+const keyboardButton = element("keyboard-button");
+const padButton = element("pad-button");
+const controller = new Controller({ input: send, nextCamera });
+const releaseKeys = buildKeyboard(keyboardPanel, send);
+buildPad(padPanel, controller);
+let controllerTimer: ReturnType<typeof setInterval> | null = null;
+
+/** The stick and paired-controller loop: starts when first needed, then just idles. */
+function runController(): void {
+  if (controllerTimer !== null) return;
+  let last = performance.now();
+  controllerTimer = setInterval(() => {
+    const now = performance.now();
+    if (live) {
+      const pad = navigator.getGamepads?.().find(Boolean);
+      if (pad) controller.pad({ axes: pad.axes, pressed: pad.buttons.map((button) => button.pressed) });
+      controller.tick((now - last) / 1000);
+    }
+    last = now;
+  }, CONTROLLER_TICK_MS);
+}
+
+function openPanel(which: HTMLElement | null): void {
+  keyboardPanel.hidden = which !== keyboardPanel;
+  padPanel.hidden = which !== padPanel;
+  keyboardButton.setAttribute("aria-pressed", String(which === keyboardPanel));
+  padButton.setAttribute("aria-pressed", String(which === padPanel));
+  if (which !== keyboardPanel) releaseKeys();
+  if (which !== padPanel) controller.release();
+  else runController();
+}
+
+keyboardButton.addEventListener("click", () => openPanel(keyboardPanel.hidden ? keyboardPanel : null));
+padButton.addEventListener("click", () => openPanel(padPanel.hidden ? padPanel : null));
+window.addEventListener("gamepadconnected", runController);
 
 element("menu-button").addEventListener("click", () => send({ t: "press", key: "escape" }));
 

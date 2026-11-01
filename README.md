@@ -45,7 +45,7 @@ Next time, just open the page you saved. It works on Wi-Fi and on mobile data, w
 ## 🔒 Private by design
 
 - **Only the game.** Your phone sees the 3DXChat window and hears the game's sound. Nothing else on your PC.
-- **Only game controls.** A phone can click inside the game, chat, and press Esc and the camera keys. No Windows key, no Alt+Tab, nothing outside the game.
+- **Only game controls.** A phone can click inside the game, chat, and use a keyboard and controller made for it. No Windows, Alt or Ctrl keys, so no Alt+Tab, and all input stops the moment the game isn't in front.
 - **One phone.** A pairing link works once, for 15 minutes. The first phone to open it gets a key of its own, and the link stops working.
 - **Encrypted end to end.** Picture, sound and controls are encrypted between your PC and your phone. They go straight between the two when they can, and through a Cloudflare relay when they can't. Cloudflare only ever sees sealed data.
 - **You'll know.** Your PC shows a notification whenever a phone connects.

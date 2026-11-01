@@ -48,6 +48,8 @@ body {
 
 body:not(.live) #actions,
 body:not(.live) #badge,
+body:not(.live) #keyboard,
+body:not(.live) #pad,
 body.chatting #actions {
   display: none;
 }
@@ -88,16 +90,137 @@ body.chatting #actions {
 }
 
 .chat { --tone: #2f7bf6; }
+.keys { --tone: #d9822b; }
+.pad { --tone: #c23d8f; }
 .camera { --tone: #8a56e8; }
 .menu { --tone: #5a5f6e; }
 .zoom { --tone: #0f9a8c; }
 .sound { --tone: #2f9e57; }
 .end { --tone: #e0453a; }
 
-.zoom[aria-pressed="true"] {
+.zoom[aria-pressed="true"],
+.keys[aria-pressed="true"],
+.pad[aria-pressed="true"] {
   opacity: 1;
   box-shadow: 0 0 0 2px #fff;
 }
+
+#keyboard {
+  position: absolute;
+  left: calc(var(--safe-left) + 6px);
+  right: calc(var(--safe-right) + 6px);
+  bottom: calc(var(--safe-bottom) + 6px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#keyboard[hidden],
+#pad[hidden] {
+  display: none;
+}
+
+.key-row {
+  display: flex;
+  gap: 4px;
+}
+
+.key {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  color: #fff;
+  background: rgba(22, 22, 31, 0.78);
+  font-size: 13px;
+  touch-action: none;
+}
+
+.key.pressed,
+.pad-button.pressed {
+  background: var(--accent);
+}
+
+#keyboard.shifted .key {
+  text-transform: uppercase;
+}
+
+#keyboard.shifted .key[data-key="shift"] {
+  background: var(--accent);
+}
+
+#pad {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.stick,
+.pad-button {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.stick {
+  bottom: calc(var(--safe-bottom) + 18px);
+  width: 124px;
+  height: 124px;
+  border-radius: 50%;
+  background: rgba(22, 22, 31, 0.5);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.25);
+}
+
+.stick.left {
+  left: calc(var(--safe-left) + 22px);
+}
+
+.stick.right {
+  right: calc(var(--safe-right) + 200px);
+}
+
+.knob {
+  position: absolute;
+  left: 34px;
+  top: 34px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.72);
+  pointer-events: none;
+}
+
+.pad-button {
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--tone);
+  opacity: 0.86;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.pad-button.a { --tone: #2f9e57; right: calc(var(--safe-right) + 74px); bottom: calc(var(--safe-bottom) + 14px); }
+.pad-button.b { --tone: #e0453a; right: calc(var(--safe-right) + 18px); bottom: calc(var(--safe-bottom) + 70px); }
+.pad-button.x { --tone: #2f7bf6; right: calc(var(--safe-right) + 130px); bottom: calc(var(--safe-bottom) + 70px); }
+.pad-button.y { --tone: #c9a227; right: calc(var(--safe-right) + 74px); bottom: calc(var(--safe-bottom) + 126px); }
+
+.pad-button.lb,
+.pad-button.rb,
+.pad-button.start {
+  --tone: #5a5f6e;
+  height: 40px;
+  font-size: 14px;
+}
+
+.pad-button.lb { left: calc(var(--safe-left) + 22px); top: calc(var(--safe-top) + 66px); }
+.pad-button.rb { right: calc(var(--safe-right) + 22px); top: calc(var(--safe-top) + 66px); }
+.pad-button.start { left: calc(50% - 26px); bottom: calc(var(--safe-bottom) + 18px); }
 
 .sound[aria-pressed="false"] #sound-waves {
   display: none;

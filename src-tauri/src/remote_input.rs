@@ -32,6 +32,7 @@ pub enum PlayInput {
     Look { dx: i32, dy: i32 },
     Wheel { ticks: i32 },
     Press { key: String },
+    Key { key: String, down: bool },
     Chat { text: String },
 }
 
@@ -56,6 +57,50 @@ fn virtual_key(key: &str) -> Option<u16> {
         "f5" => 0x74,
         "f6" => 0x75,
         "f7" => 0x76,
+        _ => return None,
+    })
+}
+
+/// The full keyboard: what a game can use, and nothing that reaches past it.
+/// Windows, Alt and Ctrl don't exist here, so no shortcut can be built. Neither
+/// does the up arrow, which 3DX Phone takes as its hotkey.
+fn keyboard_key(key: &str) -> Option<u16> {
+    if let [byte] = key.as_bytes() {
+        match byte {
+            b'a'..=b'z' => return Some(u16::from(byte.to_ascii_uppercase())),
+            b'0'..=b'9' => return Some(u16::from(*byte)),
+            _ => {}
+        }
+    }
+    if let Some(number) = key.strip_prefix('f').and_then(|rest| rest.parse::<u16>().ok()) {
+        return (1..=12).contains(&number).then(|| 0x6F + number);
+    }
+    Some(match key {
+        "space" => 0x20,
+        "enter" => ENTER,
+        "backspace" => 0x08,
+        "tab" => 0x09,
+        "shift" => 0x10,
+        "escape" => 0x1B,
+        "pageup" => 0x21,
+        "pagedown" => 0x22,
+        "end" => 0x23,
+        "home" => 0x24,
+        "left" => 0x25,
+        "right" => 0x27,
+        "down" => 0x28,
+        "delete" => 0x2E,
+        ";" => 0xBA,
+        "=" => 0xBB,
+        "," => 0xBC,
+        "-" => 0xBD,
+        "." => 0xBE,
+        "/" => 0xBF,
+        "`" => 0xC0,
+        "[" => 0xDB,
+        "\\" => 0xDC,
+        "]" => 0xDD,
+        "'" => 0xDE,
         _ => return None,
     })
 }
@@ -100,6 +145,10 @@ pub fn actions_for(input: &PlayInput) -> Result<Vec<Action>, String> {
             vec![Action::Wheel { delta: (*ticks).clamp(-MAX_WHEEL_TICKS, MAX_WHEEL_TICKS) * WHEEL_NOTCH }]
         }
         PlayInput::Press { key } => tap_key(press(key)?).to_vec(),
+        PlayInput::Key { key, down } => {
+            let code = keyboard_key(key).ok_or_else(|| "that key isn't available".to_string())?;
+            vec![Action::Key { code, down: *down }]
+        }
         PlayInput::Chat { text } => chat_actions(text),
     })
 }
@@ -121,11 +170,12 @@ fn chat_actions(text: &str) -> Vec<Action> {
     actions
 }
 
-/// The mouse buttons held down right now, so a dropped connection can't leave
-/// the camera grabbed. Keys are only ever tapped, so they can't stick.
+/// The buttons and keys held down right now, so a dropped connection can't
+/// leave the camera grabbed or a key stuck.
 #[derive(Debug, Default)]
 pub struct Held {
     buttons: Vec<MouseButton>,
+    keys: Vec<u16>,
 }
 
 impl Held {
@@ -134,13 +184,17 @@ impl Held {
             match *action {
                 Action::Button { button, down: true } if !self.buttons.contains(&button) => self.buttons.push(button),
                 Action::Button { button, down: false } => self.buttons.retain(|held| *held != button),
+                Action::Key { code, down: true } if !self.keys.contains(&code) => self.keys.push(code),
+                Action::Key { code, down: false } => self.keys.retain(|held| *held != code),
                 _ => {}
             }
         }
     }
 
     pub fn release(&mut self) -> Vec<Action> {
-        self.buttons.drain(..).map(|button| Action::Button { button, down: false }).collect()
+        let buttons = self.buttons.drain(..).map(|button| Action::Button { button, down: false });
+        let keys = self.keys.drain(..).map(|code| Action::Key { code, down: false });
+        buttons.chain(keys).collect()
     }
 }
 
@@ -171,6 +225,35 @@ mod tests {
         for key in ["lwin", "rwin", "win", "alt", "menu", "ctrl", "control", "tab", "f4", "delete", "shift", "enter", "w", "a", "s", "d", "up", "", "0x5B", "91"] {
             assert_eq!(virtual_key(key), None, "{key}");
         }
+    }
+
+    #[test]
+    fn the_full_keyboard_has_what_a_game_uses() {
+        for key in ["a", "z", "0", "9", "f1", "f12", "space", "enter", "backspace", "tab", "shift", "escape", "left", "right", "down", "home", "end", "pageup", "pagedown", "delete", ";", "=", ",", "-", ".", "/", "`", "[", "\\", "]", "'"] {
+            assert!(keyboard_key(key).is_some(), "{key}");
+        }
+        assert_eq!(keyboard_key("a"), Some(0x41));
+        assert_eq!(keyboard_key("f1"), Some(0x70));
+        assert_eq!(keyboard_key("f12"), Some(0x7B));
+    }
+
+    #[test]
+    fn the_full_keyboard_has_nothing_that_reaches_past_the_game() {
+        for key in ["lwin", "rwin", "win", "alt", "lalt", "ralt", "menu", "apps", "ctrl", "control", "lctrl", "rctrl", "up", "f0", "f13", "f24", "printscreen", "A", "", "ab", "0x5B", "91", "\u{e9}"] {
+            assert_eq!(keyboard_key(key), None, "{key}");
+        }
+        assert!(actions_for(&input(r#"{"t":"key","key":"alt","down":true}"#)).is_err());
+        assert!(actions_for(&input(r#"{"t":"key","key":"up","down":true}"#)).is_err());
+    }
+
+    #[test]
+    fn a_held_key_is_let_go_with_everything_else() {
+        let mut held = Held::default();
+        held.note(&actions_for(&input(r#"{"t":"key","key":"a","down":true}"#)).unwrap());
+        held.note(&actions_for(&input(r#"{"t":"key","key":"b","down":true}"#)).unwrap());
+        held.note(&actions_for(&input(r#"{"t":"key","key":"a","down":false}"#)).unwrap());
+        assert_eq!(held.release(), vec![Action::Key { code: 0x42, down: false }]);
+        assert!(held.release().is_empty());
     }
 
     #[test]
