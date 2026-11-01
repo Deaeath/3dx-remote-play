@@ -407,7 +407,8 @@ mod win {
     use super::{absolute, needs_game_in_front, pixel, Action, MouseButton, AUDIO_CHUNK_BYTES};
     use crate::game_window;
 
-    const SET_TITLE_TIMEOUT_MS: u32 = 1000;
+    /// A game just brought forward can take a while to answer.
+    const SET_TITLE_TIMEOUT_MS: u32 = 4000;
     const AUDIO_WAIT_MS: u32 = 100;
     const AUDIO_SAMPLE_RATE: usize = 48_000;
     const AUDIO_CHANNELS: usize = 2;

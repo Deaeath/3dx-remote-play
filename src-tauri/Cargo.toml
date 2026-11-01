@@ -1,6 +1,6 @@
 [package]
 name = "three-dx-remote-play"
-version = "1.0.6"
+version = "1.0.7"
 description = "Play 3DXChat on your phone, from anywhere."
 authors = ["Deaeath"]
 license = "MIT"
@@ -32,6 +32,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_Security_Cryptography",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Power",
   "Win32_System_StationsAndDesktops",
   "Win32_System_SystemInformation",

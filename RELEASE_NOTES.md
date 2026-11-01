@@ -1,6 +1,7 @@
-Easier to look after:
+Comes back from freezes by itself:
 
-- The app's log now says what each update check found, and records any crash.
+- Screen capture in the browser engine this app uses can occasionally freeze the app. It now restarts itself in the tray, tells you, and your phone reconnects by itself.
+- Fewer failed starts when a game has just been brought forward.
 
 3DX Remote Play plays 3DXChat on your phone, from anywhere:
 

@@ -62,6 +62,7 @@ Next time, just open the page you saved. It works on Wi-Fi and on mobile data, w
 - Your phone types into whichever chat box is active in the game, so tap the one you want first.
 - If your phone won't connect, the page shows which step it's on, and the app writes what happened to `remote_play.log` in `%APPDATA%\com.kingcolossus.remoteplay`. It holds no addresses or keys, and it stays on your PC.
 - Windows may say the app is from an unknown publisher: click **More info**, then **Run anyway**.
+- If the app ever freezes, it restarts itself in the tray within about half a minute and tells you, and your phone reconnects by itself.
 - The app keeps itself up to date. It checks GitHub every few hours and only accepts updates signed with a key that never leaves the maintainer's PC. An update waiting when the app starts goes in straight away, and one found later waits for you to choose **Restart to update** from the tray icon.
 
 <details>

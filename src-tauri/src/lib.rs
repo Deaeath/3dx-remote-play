@@ -3,12 +3,14 @@ mod remote_input;
 mod remote_play;
 mod secret;
 mod updates;
+mod watchdog;
 
 use tauri::http::{header, Response, StatusCode};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_notification::NotificationExt;
 
 const MAIN_WINDOW: &str = "main";
 const PAGE_SCHEME: &str = "remote-play";
@@ -17,7 +19,7 @@ const PAGE_SCHEME: &str = "remote-play";
 /// https://remote-play.3dx/ and is answered by `serve_page`, never the network.
 const PAGE_URL: &str = "remote-play://3dx/";
 /// What the Open with Windows entry passes, so a start with Windows stays in the tray.
-const MINIMIZED_ARG: &str = "--minimized";
+pub(crate) const MINIMIZED_ARG: &str = "--minimized";
 const TRAY_OPEN: &str = "open";
 const TRAY_QUIT: &str = "quit";
 const TRAY_UPDATE: &str = "update";
@@ -146,7 +148,12 @@ pub fn run() {
     tauri::Builder::default()
         // A second start opens the one that's running: two hosts would fight
         // over the game.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Except the watchdog making sure it came back: that's nobody asking for the window.
+            if !args.iter().any(|arg| arg.starts_with(watchdog::RECOVERED_ARG)) {
+                show_main(app);
+            }
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec![MINIMIZED_ARG])))
@@ -158,6 +165,16 @@ pub fn run() {
             setup_tray(app.handle())?;
             if !tauri::is_dev() {
                 updates::start(app.handle().clone());
+                let recoveries = watchdog::recoveries_from(std::env::args());
+                watchdog::start(app.handle().clone(), recoveries);
+                if recoveries > 0 {
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title("3DX Remote Play")
+                        .body("It froze and restarted by itself. Your phone reconnects on its own.")
+                        .show();
+                }
             }
             if !std::env::args().any(|arg| arg == MINIMIZED_ARG) {
                 show_main(app.handle());
