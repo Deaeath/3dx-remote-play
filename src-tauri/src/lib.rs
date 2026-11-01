@@ -160,6 +160,8 @@ pub fn run() {
             remote_play::remote_play_audio_start,
             remote_play::remote_play_audio_stop,
             remote_play::remote_play_verify_owner,
+            remote_play::remote_play_minimize_game,
+            remote_play::remote_play_idle_ms,
             remote_play_show_connected,
         ])
         .run(tauri::generate_context!())
@@ -181,7 +183,7 @@ mod tests {
         let permissions = capability["permissions"].as_array().unwrap();
         let handler = include_str!("lib.rs").split("generate_handler![").nth(1).unwrap().split(']').next().unwrap();
         let names: Vec<&str> = handler.split(',').map(str::trim).filter(|line| !line.is_empty()).map(|line| line.rsplit("::").next().unwrap()).collect();
-        assert_eq!(names.len(), 15);
+        assert_eq!(names.len(), 17);
         for name in names {
             assert!(include_str!("../build.rs").contains(&format!("\"{name}\"")), "{name} isn't in build.rs");
             let permission = format!("allow-{}", name.replace('_', "-"));

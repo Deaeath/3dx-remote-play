@@ -17,6 +17,8 @@ const COMMANDS: &[&str] = &[
     "remote_play_audio_stop",
     "remote_play_show_connected",
     "remote_play_verify_owner",
+    "remote_play_minimize_game",
+    "remote_play_idle_ms",
 ];
 
 fn main() {

@@ -202,10 +202,10 @@ export type PlayInput =
   | { t: "chat"; text: string };
 
 /** Phone → PC over the data channel. */
-export type PhoneCommand = PlayInput | { t: "focus" } | { t: "launch" } | { t: "paired"; passkey: PasskeyRegistration } | { t: "report"; text: string };
+export type PhoneCommand = PlayInput | { t: "focus" } | { t: "minimize" } | { t: "launch" } | { t: "paired"; passkey: PasskeyRegistration } | { t: "report"; text: string };
 
 /** "frozen": running, but not answering Windows (hung). */
-export type GamePhase = "closed" | "frozen" | "background" | "front";
+export type GamePhase = "closed" | "frozen" | "minimized" | "background" | "front";
 
 export interface PlayState {
   game: GamePhase;

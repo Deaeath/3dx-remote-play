@@ -117,6 +117,7 @@ fn inject_all(actions: &[Action]) {
 pub struct GameState {
     running: bool,
     responding: bool,
+    minimized: bool,
     front: bool,
     locked: bool,
     can_launch: bool,
@@ -160,6 +161,7 @@ pub fn remote_play_game_state(app: AppHandle, state: State<'_, RemotePlayState>)
     GameState {
         running: game.is_some(),
         responding: game.as_ref().is_some_and(|game| !win::is_hung(game.handle)),
+        minimized: game.as_ref().is_some_and(|game| win::is_minimized(game.handle)),
         front: game_window::is_in_front(),
         locked: win::session_locked(),
         can_launch: known_game_path(&app, &state).is_some(),
@@ -186,6 +188,23 @@ fn focus_game() -> Result<(), String> {
 #[tauri::command]
 pub async fn remote_play_focus_game() -> Result<(), String> {
     off_main_thread(focus_game).await?
+}
+
+/// Takes the game off the PC's screen. Bringing it back is `remote_play_focus_game`.
+#[tauri::command]
+pub async fn remote_play_minimize_game() -> Result<(), String> {
+    let game = game_window::find().ok_or("3DXChat isn't running")?;
+    if win::minimize(game.handle) {
+        Ok(())
+    } else {
+        Err("Windows wouldn't minimize the game".to_string())
+    }
+}
+
+/// How long since this PC last saw any keyboard or mouse input.
+#[tauri::command]
+pub fn remote_play_idle_ms() -> u64 {
+    win::idle_ms()
 }
 
 #[tauri::command]
@@ -375,16 +394,17 @@ mod win {
     use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
     use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED};
     use windows_sys::Win32::System::StationsAndDesktops::{CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, DESKTOP_READOBJECTS, UOI_NAME};
+    use windows_sys::Win32::System::SystemInformation::GetTickCount;
     use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE,
+        GetLastInputInfo, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, LASTINPUTINFO, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE,
         MAPVK_VK_TO_VSC, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
         MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, VK_MENU,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, GetAncestor, GetClientRect, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId,
-        IsHungAppWindow, IsIconic, IsWindow, SendMessageTimeoutW, SetForegroundWindow, ShowWindow, WindowFromPoint, GA_ROOT,
-        SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_RESTORE, WM_SETTEXT,
+        IsHungAppWindow, IsIconic, IsWindow, SendMessageTimeoutW, SetForegroundWindow, ShowWindow, ShowWindowAsync, WindowFromPoint, GA_ROOT,
+        SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_MINIMIZE, SW_RESTORE, WM_SETTEXT,
     };
 
     use super::{absolute, needs_game_in_front, pixel, Action, MouseButton, AUDIO_CHUNK_BYTES};
@@ -544,6 +564,25 @@ mod win {
         unsafe { IsHungAppWindow(hwnd(handle)) != 0 }
     }
 
+    pub fn is_minimized(handle: isize) -> bool {
+        unsafe { IsIconic(hwnd(handle)) != 0 }
+    }
+
+    /// Asynchronous, so a hung game can't hold this up.
+    pub fn minimize(handle: isize) -> bool {
+        unsafe { ShowWindowAsync(hwnd(handle), SW_MINIMIZE) != 0 }
+    }
+
+    pub fn idle_ms() -> u64 {
+        let mut info = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+        unsafe {
+            if GetLastInputInfo(&mut info) == 0 {
+                return 0;
+            }
+            u64::from(GetTickCount().wrapping_sub(info.dwTime))
+        }
+    }
+
     pub fn is_window(handle: isize) -> bool {
         unsafe { IsWindow(hwnd(handle)) != 0 }
     }
@@ -653,6 +692,18 @@ mod win {
 
     pub fn is_hung(_handle: isize) -> bool {
         false
+    }
+
+    pub fn is_minimized(_handle: isize) -> bool {
+        false
+    }
+
+    pub fn minimize(_handle: isize) -> bool {
+        false
+    }
+
+    pub fn idle_ms() -> u64 {
+        0
     }
 
     pub fn is_window(_handle: isize) -> bool {

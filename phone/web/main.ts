@@ -548,6 +548,11 @@ function showGameState(state: PlayState): void {
     );
   } else if (state.game === "frozen") {
     showPanel("game", "3DXChat isn't responding", "It has frozen on your PC. This page carries on by itself if it comes back.");
+  } else if (state.game === "minimized") {
+    showPanel("game", "3DXChat is hidden", "It's minimized on your PC, so there's no picture until you bring it back.", {
+      label: "Bring it back",
+      run: () => send({ t: "focus" }),
+    });
   } else if (state.game === "background") {
     showPanel("game", "3DXChat isn't in front", "Something else is on top of the game on your PC.", {
       label: "Bring it to the front",
@@ -665,6 +670,7 @@ function nextCamera(): void {
 }
 
 element("camera-button").addEventListener("click", nextCamera);
+element("hide-button").addEventListener("click", () => send({ t: "minimize" }));
 
 const keyboardPanel = element("keyboard");
 const padPanel = element("pad");

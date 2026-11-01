@@ -36,6 +36,7 @@ vi.mock("../src/host", async (importOriginal) => {
       state.newLinks += 1;
     }
     async confirmOwner() {}
+    async setAutoHide() {}
     endSession() {}
   }
   return { ...actual, RemotePlayHost: FakeHost };

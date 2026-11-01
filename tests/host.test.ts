@@ -114,12 +114,14 @@ function harness(pairing: RemotePairing | null, game: Partial<NativeGameState> =
   const connected: string[] = [];
   const saved: RemotePairing[] = [];
   const captured = fakeStream();
-  const native: NativeGameState = { running: true, responding: true, front: true, locked: false, canLaunch: true, ...game };
+  const native: NativeGameState = { running: true, responding: true, minimized: false, front: true, locked: false, canLaunch: true, ...game };
   const deps = {
     loadPairing: vi.fn(async () => (pairing ? JSON.stringify(pairing) : null)),
     savePairing: vi.fn(async (json: string) => void saved.push(JSON.parse(json) as RemotePairing)),
     gameState: vi.fn(async () => native),
     focusGame: vi.fn(async () => undefined),
+    minimizeGame: vi.fn(async () => undefined),
+    idleMs: vi.fn(async () => 2 * 60_000),
     launchGame: vi.fn(async () => undefined),
     input: vi.fn(async () => undefined),
     releaseInput: vi.fn(async () => undefined),
@@ -216,7 +218,8 @@ describe("Remote Play pairing state", () => {
   });
 
   it("names where the game is", () => {
-    const game = { running: true, responding: true, front: true, locked: false, canLaunch: true };
+    const game = { running: true, responding: true, minimized: false, front: true, locked: false, canLaunch: true };
+    expect(gamePhase({ ...game, minimized: true, front: false })).toBe("minimized");
     expect(gamePhase({ ...game, running: false, responding: false, front: false })).toBe("closed");
     expect(gamePhase({ ...game, responding: false })).toBe("frozen");
     expect(gamePhase({ ...game, front: false })).toBe("background");
@@ -955,5 +958,86 @@ describe("Windows Hello on the PC", () => {
     await setup.host.setEnabled(true);
     await setup.host.confirmOwner();
     expect(setup.deps.verifyOwner).toHaveBeenCalledOnce();
+  });
+});
+
+describe("hiding the game on the PC", () => {
+  async function livePhone(pairingExtra: Partial<RemotePairing> = {}, game: Partial<NativeGameState> = {}) {
+    const pairing = pairingWith(pairingExtra);
+    const setup = harness(pairing, game);
+    const socket = await online(setup);
+    const channel = await connectPhone(setup, socket, linkCredential(pairing));
+    return { setup, channel, pairing };
+  }
+
+  const AFTER_A_MINUTE = 60_001;
+
+  it("does it when the phone asks, and says so", async () => {
+    const { setup, channel } = await livePhone();
+    setup.native.minimized = true;
+    channel.onmessage?.({ data: '{"t":"minimize"}' });
+    await vi.waitFor(() => expect(setup.deps.minimizeGame).toHaveBeenCalledOnce(), WAIT);
+    await vi.waitFor(() => expect(channel.events().at(-1)).toMatchObject({ t: "state", game: "minimized" }), WAIT);
+  });
+
+  it("doesn't start a capture of a hidden game", async () => {
+    const { setup } = await livePhone({}, { minimized: true });
+    await flush();
+    expect(setup.deps.captureGame).not.toHaveBeenCalled();
+  });
+
+  it("hides it a minute after the phone leaves, with nobody at the PC", async () => {
+    const { setup, channel } = await livePhone();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    channel.onclose?.();
+    expect(setup.deps.minimizeGame).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(AFTER_A_MINUTE);
+    expect(setup.deps.minimizeGame).toHaveBeenCalledOnce();
+  });
+
+  it("leaves it alone if someone has touched the PC since", async () => {
+    const { setup, channel } = await livePhone();
+    setup.deps.idleMs.mockResolvedValue(5000);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    channel.onclose?.();
+    await vi.advanceTimersByTimeAsync(AFTER_A_MINUTE);
+    expect(setup.deps.minimizeGame).not.toHaveBeenCalled();
+  });
+
+  it("leaves it alone when turned off", async () => {
+    const { setup, channel } = await livePhone();
+    await setup.host.setAutoHide(false);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    channel.onclose?.();
+    await vi.advanceTimersByTimeAsync(AFTER_A_MINUTE);
+    expect(setup.deps.minimizeGame).not.toHaveBeenCalled();
+  });
+
+  it("leaves it alone when the session is ended on the PC", async () => {
+    const { setup } = await livePhone();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    setup.host.endSession();
+    await vi.advanceTimersByTimeAsync(AFTER_A_MINUTE);
+    expect(setup.deps.minimizeGame).not.toHaveBeenCalled();
+  });
+
+  it("never hides it during a session, however quiet the phone is", async () => {
+    const { setup } = await livePhone();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(setup.deps.minimizeGame).not.toHaveBeenCalled();
+  });
+
+  it("doesn't let a phone that hasn't made its passkey hide anything", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    await sendOffer(socket, linkCredential(pairing));
+    const channel = new FakeChannel();
+    setup.peers.at(-1)?.ondatachannel?.({ channel });
+    await vi.waitFor(() => expect(channel.events().some((event) => event.t === "pair")).toBe(true), WAIT);
+    channel.onmessage?.({ data: '{"t":"minimize"}' });
+    await flush();
+    expect(setup.deps.minimizeGame).not.toHaveBeenCalled();
   });
 });

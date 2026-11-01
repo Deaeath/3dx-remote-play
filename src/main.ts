@@ -40,6 +40,7 @@ const phoneName = element("phone-name");
 const forgetButton = element<HTMLButtonElement>("forget");
 const startupBox = element("startup");
 const autostartToggle = element<HTMLInputElement>("autostart");
+const autoHideToggle = element<HTMLInputElement>("auto-hide");
 
 let snapshot: HostSnapshot = { pairing: null, relay: "off", session: null };
 let busy = false;
@@ -111,6 +112,7 @@ function render(): void {
     : "Pairing links stop working after a while. Make a new one when your phone is in your hand.";
 
   startupBox.hidden = !enabled;
+  autoHideToggle.checked = pairing?.autoHide !== false;
 
   // Take the code off screen the moment it stops working.
   if (expiryTimer !== null) clearTimeout(expiryTimer);
@@ -194,6 +196,11 @@ function showAutostart(): void {
     })
     .catch(() => undefined);
 }
+
+autoHideToggle.addEventListener("change", () => {
+  const wanted = autoHideToggle.checked;
+  void whileBusy(() => host.setAutoHide(wanted));
+});
 
 autostartToggle.addEventListener("change", () => {
   const change = autostartToggle.checked ? enableAutostart() : disableAutostart();

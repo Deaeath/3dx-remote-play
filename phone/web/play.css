@@ -92,6 +92,7 @@ body.chatting #actions {
 .chat { --tone: #2f7bf6; }
 .keys { --tone: #d9822b; }
 .pad { --tone: #c23d8f; }
+.hide { --tone: #2a8fb8; }
 .camera { --tone: #8a56e8; }
 .menu { --tone: #5a5f6e; }
 .zoom { --tone: #0f9a8c; }

@@ -61,6 +61,10 @@ const RESUME_LIFETIME_MS = 10 * 60_000;
 /** Turning on and then showing the code shouldn't ask twice. */
 const OWNER_CHECK_LASTS_MS = 2 * 60_000;
 const ENDED_ON_THIS_PC = "ended on this PC";
+/** How long after a phone leaves, with nobody at the PC, the game gets hidden. */
+const AUTO_HIDE_AFTER_MS = 60_000;
+/** Timers and Windows' idle clock don't tick quite together. */
+const AUTO_HIDE_SLACK_MS = 1000;
 const CRLF = "\r\n";
 const VIDEO_CODECS = ["H264", "VP8", "VP9", "AV1"];
 const MAX_FRAME_RATE = 60;
@@ -79,12 +83,15 @@ export interface RemotePairing {
   deviceName: string | null;
   /** The public half of the phone's passkey. A phone needs this and its secret. */
   devicePasskey: PairedPasskey | null;
+  /** Hide the game once a phone has left and nobody's at the PC. On unless turned off. */
+  autoHide?: boolean;
 }
 
 export interface NativeGameState {
   running: boolean;
   /** False while the game is hung. */
   responding: boolean;
+  minimized: boolean;
   front: boolean;
   locked: boolean;
   canLaunch: boolean;
@@ -96,6 +103,9 @@ export interface HostDeps {
   savePairing(json: string): Promise<void>;
   gameState(): Promise<NativeGameState>;
   focusGame(): Promise<void>;
+  minimizeGame(): Promise<void>;
+  /** How long since anyone or anything last used this PC's keyboard or mouse. */
+  idleMs(): Promise<number>;
   launchGame(): Promise<void>;
   input(input: unknown): Promise<void>;
   releaseInput(): Promise<void>;
@@ -156,6 +166,7 @@ export function acceptedCredentials(pairing: RemotePairing, now = Date.now()): (
 export function gamePhase(state: NativeGameState): GamePhase {
   if (!state.running) return "closed";
   if (!state.responding) return "frozen";
+  if (state.minimized) return "minimized";
   return state.front ? "front" : "background";
 }
 
@@ -257,6 +268,7 @@ export class RemotePlayHost {
   private nonce: { value: string; expiresAt: number } | null = null;
   private resume: { token: string; expiresAt: number } | null = null;
   private ownerCheckedAt = 0;
+  private autoHideTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = RECONNECT_MIN_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -313,6 +325,33 @@ export class RemotePlayHost {
       this.endSession("Remote Play was turned off");
       this.goOffline();
     }
+  }
+
+  async setAutoHide(autoHide: boolean): Promise<void> {
+    if (!autoHide) this.cancelAutoHide();
+    if (this.pairing) await this.store({ ...this.pairing, autoHide });
+  }
+
+  private cancelAutoHide(): void {
+    if (this.autoHideTimer !== null) clearTimeout(this.autoHideTimer);
+    this.autoHideTimer = null;
+  }
+
+  /** A phone just left: if nobody takes over at the PC, take the game off its screen. */
+  private phoneLeft(session: Session): void {
+    if (!session.live || this.pairing?.autoHide === false) return;
+    this.cancelAutoHide();
+    this.autoHideTimer = setTimeout(() => void this.autoHide(), AUTO_HIDE_AFTER_MS);
+  }
+
+  private async autoHide(): Promise<void> {
+    this.autoHideTimer = null;
+    const idle = await this.deps.idleMs().catch(() => 0);
+    const native = await this.deps.gameState().catch(() => null);
+    // Any input since the phone left means someone's at the PC, and it's theirs now.
+    if (this.session || idle < AUTO_HIDE_AFTER_MS - AUTO_HIDE_SLACK_MS || !native?.running || native.minimized) return;
+    await this.deps.minimizeGame().catch(() => undefined);
+    this.deps.log("hid the game: the phone left and nobody's at the PC");
   }
 
   /** A fresh link. Any phone paired before is out, on a new room. */
@@ -450,6 +489,7 @@ export class RemotePlayHost {
     const { sdp, name, note, at } = offer;
     const turn = (this.offers += 1);
     const openedAt = Date.now();
+    this.cancelAutoHide();
     this.endSession("the phone connected again");
     this.deps.log(`offer from ${name.slice(0, 40)}${viaLink ? " with the pairing link" : ""}: routes ${routeKinds(sdp)}${typeof note === "string" ? `; ${note.slice(0, MAX_REPORT_LENGTH)}` : ""}`);
     const iceServers = await this.deps.loadIceServers().catch(() => STUN);
@@ -503,7 +543,9 @@ export class RemotePlayHost {
       channel.onopen = () => void this.onChannelOpen(session);
       channel.onmessage = (event) => void this.onCommand(session, String(event.data));
       channel.onclose = () => {
-        if (this.session === session) this.endSession("the connection closed");
+        if (this.session !== session) return;
+        this.endSession("the connection closed");
+        this.phoneLeft(session);
       };
       if (channel.readyState === "open") void this.onChannelOpen(session);
     };
@@ -512,7 +554,10 @@ export class RemotePlayHost {
     };
     peer.onconnectionstatechange = () => {
       const state = peer.connectionState;
-      if (this.session === session && (state === "failed" || state === "closed")) this.endSession(`the connection ${state}`);
+      if (this.session === session && (state === "failed" || state === "closed")) {
+        this.endSession(`the connection ${state}`);
+        this.phoneLeft(session);
+      }
     };
 
     try {
@@ -625,7 +670,7 @@ export class RemotePlayHost {
       this.dropCapture(session);
     }
     this.sendState(session, native);
-    if (native.running && native.responding && !session.stream && !native.locked) {
+    if (native.running && native.responding && !native.minimized && !session.stream && !native.locked) {
       await this.startCapture(session);
       if (this.session !== session) return;
       this.sendState(session, native);
@@ -706,6 +751,9 @@ export class RemotePlayHost {
       if (command.t === "paired") await this.finishPairing(session, command.passkey);
     } else if (command.t === "focus") {
       await this.deps.focusGame().catch(() => undefined);
+      await this.refreshGame(session);
+    } else if (command.t === "minimize") {
+      await this.deps.minimizeGame().catch(() => undefined);
       await this.refreshGame(session);
     } else if (command.t === "launch") {
       await this.deps.launchGame().catch(() => undefined);
@@ -800,6 +848,8 @@ export const realHostDeps: HostDeps = {
   savePairing: (pairing) => invoke("remote_play_save_pairing", { pairing }),
   gameState: () => invoke<NativeGameState>("remote_play_game_state"),
   focusGame: () => invoke("remote_play_focus_game"),
+  minimizeGame: () => invoke("remote_play_minimize_game"),
+  idleMs: () => invoke<number>("remote_play_idle_ms"),
   launchGame: () => invoke("remote_play_launch_game"),
   input: (input) => invoke("remote_play_input", { input }),
   releaseInput: () => invoke("remote_play_release"),

@@ -484,3 +484,30 @@ describe("the phone page pairing", () => {
     expect(JSON.parse(localStorage.getItem("3dx-play:v1") ?? "{}").room).toBe(savedCredential.room);
   });
 });
+
+describe("the phone page hiding the game", () => {
+  async function livePeer() {
+    const { socket, offer, peer } = await startedAndOffered();
+    await answer(socket, offer.at);
+    await vi.waitFor(() => expect(peer.remote).toHaveLength(1));
+    peer.channel.readyState = "open";
+    peer.channel.onopen?.();
+    return peer;
+  }
+
+  it("asks the PC to hide it", async () => {
+    const peer = await livePeer();
+    click("hide-button");
+    expect(JSON.parse(peer.channel.sent.at(-1) ?? "{}")).toEqual({ t: "minimize" });
+  });
+
+  it("says it's hidden and offers to bring it back", async () => {
+    const peer = await livePeer();
+    peer.channel.onmessage?.({ data: JSON.stringify({ t: "state", game: "minimized", video: true, locked: false, canLaunch: true }) });
+    expect(panelTitle()).toBe("3DXChat is hidden");
+    click("panel-action");
+    expect(JSON.parse(peer.channel.sent.at(-1) ?? "{}")).toEqual({ t: "focus" });
+    peer.channel.onmessage?.({ data: JSON.stringify({ t: "state", game: "front", video: true, locked: false, canLaunch: true }) });
+    expect(document.getElementById("panel")?.hidden).toBe(true);
+  });
+});

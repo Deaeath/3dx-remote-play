@@ -57,6 +57,7 @@ Next time, just open the page you saved. It works on Wi-Fi and on mobile data, w
 - 3DXChat has to be open, or start it from your phone once it has run on this PC.
 - Closing the window keeps Remote Play running in the tray. **Open with Windows** makes the PC ready again after a restart.
 - It works with a VPN on, on your PC or your phone.
+- Your phone can hide the game on your PC, and the app hides it by itself a minute after your phone leaves if nobody's at the PC. You can turn that off. Hiding pauses the picture until you bring the game back.
 - Your phone types into whichever chat box is active in the game, so tap the one you want first.
 - If your phone won't connect, the page shows which step it's on, and the app writes what happened to `remote_play.log` in `%APPDATA%\com.kingcolossus.remoteplay`. It holds no addresses or keys, and it stays on your PC.
 - Windows may say the app is from an unknown publisher: click **More info**, then **Run anyway**.

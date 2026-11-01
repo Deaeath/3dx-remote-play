@@ -26,6 +26,8 @@
     "allow-remote-play-audio-start",
     "allow-remote-play-audio-stop",
     "allow-remote-play-show-connected",
-    "allow-remote-play-verify-owner"
+    "allow-remote-play-verify-owner",
+    "allow-remote-play-minimize-game",
+    "allow-remote-play-idle-ms"
   ]
 }
