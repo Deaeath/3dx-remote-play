@@ -537,6 +537,8 @@ export class RemotePlayHost {
     if (this.session !== session) return;
     const native = await this.deps.gameState().catch(() => null);
     if (!native || this.session !== session) return;
+    // A key or button held down mustn't carry over into whatever is in front now.
+    if (!native.front) void this.deps.releaseInput().catch(() => undefined);
 
     const track = session.stream?.getVideoTracks()[0];
     if (track?.readyState === "ended") {

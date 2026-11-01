@@ -5,6 +5,7 @@
 
 import "./style.css";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { LINK_LIFETIME_MS, RemotePlayHost, pairingLink, realHostDeps, type HostSnapshot } from "./host";
@@ -46,6 +47,7 @@ let codeShown = false;
 let wantedEnabled: boolean | null = null;
 let forgetArmed: ReturnType<typeof setTimeout> | null = null;
 let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+let shownOnTray: string | null = null;
 
 /** Someone at the PC can always see that a phone connected. */
 async function notifyConnected(name: string): Promise<void> {
@@ -57,11 +59,19 @@ async function notifyConnected(name: string): Promise<void> {
   }
 }
 
+/** Someone at the PC can see a phone is connected for as long as it is. */
+function showOnTray(phone: string | null): void {
+  if (phone === shownOnTray) return;
+  shownOnTray = phone;
+  invoke("remote_play_show_connected", { phone }).catch((error: unknown) => console.warn("[remote play]", error));
+}
+
 const host = new RemotePlayHost(
   realHostDeps,
   (next) => {
     snapshot = next;
     render();
+    showOnTray(next.session?.live ? next.session.name : null);
   },
   (name) => void notifyConnected(name),
 );

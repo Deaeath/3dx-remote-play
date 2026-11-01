@@ -24,6 +24,7 @@
     "allow-remote-play-save-pairing",
     "allow-remote-play-log",
     "allow-remote-play-audio-start",
-    "allow-remote-play-audio-stop"
+    "allow-remote-play-audio-stop",
+    "allow-remote-play-show-connected"
   ]
 }

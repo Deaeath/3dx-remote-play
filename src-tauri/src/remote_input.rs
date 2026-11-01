@@ -170,6 +170,12 @@ fn chat_actions(text: &str) -> Vec<Action> {
     actions
 }
 
+/// Whether this may only happen with the game in front at that very moment.
+/// Letting go always may, or a key or button could stay stuck down.
+pub fn needs_game_in_front(action: &Action) -> bool {
+    matches!(action, Action::Key { down: true, .. } | Action::Char { .. })
+}
+
 /// The buttons and keys held down right now, so a dropped connection can't
 /// leave the camera grabbed or a key stuck.
 #[derive(Debug, Default)]
@@ -247,6 +253,14 @@ mod tests {
     }
 
     #[test]
+    fn typing_needs_the_game_in_front_but_letting_go_never_does() {
+        assert!(needs_game_in_front(&Action::Key { code: ENTER, down: true }));
+        assert!(needs_game_in_front(&Action::Char { unit: 97 }));
+        assert!(!needs_game_in_front(&Action::Key { code: ENTER, down: false }));
+        assert!(!needs_game_in_front(&Action::Button { button: MouseButton::Left, down: false }));
+    }
+
+    #[test]
     fn a_held_key_is_let_go_with_everything_else() {
         let mut held = Held::default();
         held.note(&actions_for(&input(r#"{"t":"key","key":"a","down":true}"#)).unwrap());
@@ -282,7 +296,6 @@ mod tests {
         for json in [
             r#"{"t":"shell","command":"calc"}"#,
             r#"{"t":"vk","code":91}"#,
-            r#"{"t":"key","key":"w","down":true}"#,
             r#"{"t":"text","text":"raw typing"}"#,
             r#"{"t":"button","button":"middle","down":true}"#,
             r#"{"t":"tap","x":"0.5","y":0.5}"#,

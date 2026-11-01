@@ -30,7 +30,7 @@ use tauri::{
     AppHandle, Manager, State,
 };
 
-use crate::remote_input::{absolute, actions_for, pixel, Action, Held, MouseButton, PlayInput};
+use crate::remote_input::{absolute, actions_for, needs_game_in_front, pixel, Action, Held, MouseButton, PlayInput};
 use crate::{game_window, secret};
 
 /// The game window's title while capture picks it. The window's browser
@@ -380,7 +380,7 @@ mod win {
         SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_RESTORE, WM_SETTEXT,
     };
 
-    use super::{absolute, pixel, Action, MouseButton, AUDIO_CHUNK_BYTES};
+    use super::{absolute, needs_game_in_front, pixel, Action, MouseButton, AUDIO_CHUNK_BYTES};
     use crate::game_window;
 
     const SET_TITLE_TIMEOUT_MS: u32 = 1000;
@@ -479,6 +479,11 @@ mod win {
         for action in actions {
             let presses = matches!(action, Action::Button { down: true, .. } | Action::Wheel { .. });
             if presses && !pointer_on_game() {
+                continue;
+            }
+            // Again here, not just when the input arrived: a message and its Enter
+            // must never land in a terminal that came to the front in between.
+            if needs_game_in_front(action) && !game_window::is_in_front() {
                 continue;
             }
             inputs_for(action, &mut inputs);

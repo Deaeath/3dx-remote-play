@@ -452,6 +452,22 @@ describe("Remote Play host", () => {
     expect(setup.host.snapshot().session).toBeNull();
   });
 
+  it("lets go of anything held once the game leaves the front", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing, { front: false });
+    const socket = await online(setup);
+    await connectPhone(setup, socket, linkCredential(pairing));
+    expect(setup.deps.releaseInput).toHaveBeenCalled();
+  });
+
+  it("holds on to what's held while the game stays in front", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    await connectPhone(setup, socket, linkCredential(pairing));
+    expect(setup.deps.releaseInput).not.toHaveBeenCalled();
+  });
+
   it("ends the session when the connection fails", async () => {
     const pairing = pairingWith();
     const setup = harness(pairing);

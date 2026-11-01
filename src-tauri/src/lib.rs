@@ -4,6 +4,7 @@ mod remote_play;
 mod secret;
 
 use tauri::http::{header, Response, StatusCode};
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
@@ -18,6 +19,12 @@ const PAGE_URL: &str = "remote-play://3dx/";
 const MINIMIZED_ARG: &str = "--minimized";
 const TRAY_OPEN: &str = "open";
 const TRAY_QUIT: &str = "quit";
+const TRAY_ID: &str = "tray";
+const TRAY_TOOLTIP: &str = "3DX Remote Play";
+const MAX_PHONE_NAME_CHARS: usize = 40;
+/// How much of the icon the connected dot covers, as a fraction of its width.
+const DOT_WIDTH: f64 = 0.5;
+const DOT_COLOUR: [u8; 4] = [0xE5, 0x39, 0x35, 0xFF];
 
 fn serve_page(app: &AppHandle, path: &str) -> Response<Vec<u8>> {
     let Some(asset) = app.asset_resolver().get(path.to_string()) else {
@@ -48,14 +55,51 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// The icon with a red dot in its corner: someone at the PC can see a phone is
+/// connected without hovering, and even if Windows held the notification back.
+fn with_connected_dot(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let mut pixels = rgba.to_vec();
+    let radius = f64::from(width.min(height)) * DOT_WIDTH / 2.0;
+    let (centre_x, centre_y) = (f64::from(width) - radius, f64::from(height) - radius);
+    for (index, pixel) in pixels.chunks_exact_mut(4).enumerate() {
+        let x = (index as u32 % width.max(1)) as f64 + 0.5;
+        let y = (index as u32 / width.max(1)) as f64 + 0.5;
+        if (x - centre_x).hypot(y - centre_y) <= radius {
+            pixel.copy_from_slice(&DOT_COLOUR);
+        }
+    }
+    pixels
+}
+
+/// Shows on the tray whether a phone is connected, and which.
+#[tauri::command]
+fn remote_play_show_connected(app: AppHandle, phone: Option<String>) -> Result<(), String> {
+    let tray = app.tray_by_id(TRAY_ID).ok_or("the tray icon is missing")?;
+    let icon = app.default_window_icon().ok_or("the app has no icon")?;
+    let tooltip = match &phone {
+        Some(name) => {
+            let name: String = name.chars().filter(|c| !c.is_control()).take(MAX_PHONE_NAME_CHARS).collect();
+            format!("{TRAY_TOOLTIP}: {name} is connected")
+        }
+        None => TRAY_TOOLTIP.to_string(),
+    };
+    let image = if phone.is_some() {
+        Image::new_owned(with_connected_dot(icon.rgba(), icon.width(), icon.height()), icon.width(), icon.height())
+    } else {
+        icon.clone()
+    };
+    tray.set_icon(Some(image)).map_err(|error| error.to_string())?;
+    tray.set_tooltip(Some(tooltip)).map_err(|error| error.to_string())
+}
+
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, TRAY_OPEN, "Open 3DX Remote Play", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, TRAY_QUIT, "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &separator, &quit])?;
 
-    let mut tray = TrayIconBuilder::with_id("tray")
-        .tooltip("3DX Remote Play")
+    let mut tray = TrayIconBuilder::with_id(TRAY_ID)
+        .tooltip(TRAY_TOOLTIP)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -115,6 +159,7 @@ pub fn run() {
             remote_play::remote_play_log,
             remote_play::remote_play_audio_start,
             remote_play::remote_play_audio_stop,
+            remote_play_show_connected,
         ])
         .run(tauri::generate_context!())
         .expect("error while running 3DX Remote Play");
@@ -135,12 +180,22 @@ mod tests {
         let permissions = capability["permissions"].as_array().unwrap();
         let handler = include_str!("lib.rs").split("generate_handler![").nth(1).unwrap().split(']').next().unwrap();
         let names: Vec<&str> = handler.split(',').map(str::trim).filter(|line| !line.is_empty()).map(|line| line.rsplit("::").next().unwrap()).collect();
-        assert_eq!(names.len(), 13);
+        assert_eq!(names.len(), 14);
         for name in names {
             assert!(include_str!("../build.rs").contains(&format!("\"{name}\"")), "{name} isn't in build.rs");
             let permission = format!("allow-{}", name.replace('_', "-"));
             assert!(permissions.iter().any(|entry| entry.as_str() == Some(permission.as_str())), "{permission} isn't in the capability");
         }
+    }
+
+    #[test]
+    fn the_connected_dot_sits_in_the_corner_and_leaves_the_rest() {
+        let plain = vec![9u8; 4 * 100 * 100];
+        let dotted = with_connected_dot(&plain, 100, 100);
+        let at = |x: usize, y: usize| &dotted[(y * 100 + x) * 4..(y * 100 + x) * 4 + 4];
+        assert_eq!(at(75, 75), &DOT_COLOUR);
+        assert_eq!(at(10, 10), &[9, 9, 9, 9]);
+        assert_eq!(dotted.len(), plain.len());
     }
 
     #[test]
