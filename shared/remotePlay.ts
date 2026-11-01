@@ -201,8 +201,12 @@ export type PlayInput =
   | { t: "key"; key: string; down: boolean }
   | { t: "chat"; text: string };
 
+/** How much picture to send: more of it costs more of the phone's data. */
+export type PlayQuality = "low" | "medium" | "high";
+export const PLAY_QUALITIES: readonly PlayQuality[] = ["low", "medium", "high"];
+
 /** Phone → PC over the data channel. */
-export type PhoneCommand = PlayInput | { t: "focus" } | { t: "minimize" } | { t: "launch" } | { t: "paired"; passkey: PasskeyRegistration } | { t: "report"; text: string };
+export type PhoneCommand = PlayInput | { t: "focus" } | { t: "minimize" } | { t: "launch" } | { t: "quality"; quality: PlayQuality } | { t: "watching"; on: boolean } | { t: "paired"; passkey: PasskeyRegistration } | { t: "report"; text: string };
 
 /** "frozen": running, but not answering Windows (hung). */
 export type GamePhase = "closed" | "frozen" | "minimized" | "background" | "front";

@@ -5,6 +5,7 @@
 
 import {
   MAX_TEXT_LENGTH,
+  PLAY_QUALITIES,
   RELAY_REPLACED_CODE,
   isCredential,
   parseLinkFragment,
@@ -18,6 +19,7 @@ import {
   type PhoneCommand,
   type PlayCredential,
   type PlayKey,
+  type PlayQuality,
   type PlayState,
   type SavedCredential,
 } from "../../shared/remotePlay";
@@ -45,6 +47,9 @@ const PING_MS = 25_000;
 const STATS_MS = 2000;
 const DETAIL_MS = 1000;
 const CONTROLLER_TICK_MS = 33;
+const QUALITY_KEY = "3dx-play:quality";
+const BYTES_PER_MB = 1_000_000;
+const BYTES_PER_GB = 1_000_000_000;
 /** Tell the PC what this phone really sees: soon after starting, then now and then. */
 const REPORT_FIRST_TICK = 3;
 const REPORT_EVERY_TICKS = 15;
@@ -507,6 +512,8 @@ function onHostEvent(text: string): void {
     showPanel("connection", "Secure this phone", "Only this phone will be able to connect, and only once it knows it's you.", { label: "Secure with Face ID or passcode", run: () => void securePhone() });
   } else if (event.t === "resume") {
     resumeToken = event.token;
+    // The PC has only just let this phone in, so anything sooner would be ignored.
+    sendQuality();
   } else if (event.t === "state") {
     showGameState(event);
   }
@@ -571,16 +578,19 @@ async function updateBadge(): Promise<void> {
   const stats = await peer.getStats();
   const pairs: { currentRoundTripTime?: number; localCandidateId?: string; remoteCandidateId?: string }[] = [];
   let framesDecoded = 0;
+  let received = 0;
   stats.forEach((report) => {
     if (report.type === "candidate-pair" && report.nominated && report.state === "succeeded") pairs.push(report);
     if (report.type === "inbound-rtp" && report.kind === "video") framesDecoded = report.framesDecoded ?? 0;
+    if (report.type === "inbound-rtp") received += report.bytesReceived ?? 0;
   });
   const pair = pairs[0];
   const local = stats.get(pair?.localCandidateId ?? "")?.candidateType;
   const remote = stats.get(pair?.remoteCandidateId ?? "")?.candidateType;
   const ms = pair?.currentRoundTripTime === undefined ? "" : `${Math.round(pair.currentRoundTripTime * 1000)} ms`;
   const seen = picture.videoWidth > 0;
-  badge.textContent = [ms, local === "relay" ? "relayed" : "", seen ? "" : "no picture yet"].filter(Boolean).join(" ");
+  const used = received >= BYTES_PER_GB ? `${(received / BYTES_PER_GB).toFixed(1)} GB` : `${Math.round(received / BYTES_PER_MB)} MB`;
+  badge.textContent = [ms, local === "relay" ? "relayed" : "", seen ? used : "no picture yet"].filter(Boolean).join(" ");
 
   statsTicks += 1;
   if (statsTicks === REPORT_FIRST_TICK || statsTicks % REPORT_EVERY_TICKS === 0) {
@@ -671,6 +681,31 @@ function nextCamera(): void {
 }
 
 element("camera-button").addEventListener("click", nextCamera);
+
+const qualityPicker = element<HTMLSelectElement>("quality");
+
+function savedQuality(): string {
+  try {
+    const saved = localStorage.getItem(QUALITY_KEY);
+    return saved && (PLAY_QUALITIES as readonly string[]).includes(saved) ? saved : "medium";
+  } catch {
+    return "medium";
+  }
+}
+
+function sendQuality(): void {
+  send({ t: "quality", quality: qualityPicker.value as PlayQuality });
+}
+
+qualityPicker.value = savedQuality();
+qualityPicker.addEventListener("change", () => {
+  try {
+    localStorage.setItem(QUALITY_KEY, qualityPicker.value);
+  } catch {
+    // It just won't be remembered.
+  }
+  sendQuality();
+});
 element("hide-button").addEventListener("click", () => send({ t: "minimize" }));
 
 const keyboardPanel = element("keyboard");
@@ -763,6 +798,7 @@ function start(): void {
 function resume(): void {
   if (!wanted) return;
   if (live && peer?.connectionState === "connected") {
+    send({ t: "watching", on: true });
     void keepScreenOn();
     playPicture();
     return;
@@ -809,6 +845,8 @@ window.addEventListener("pageshow", (event) => {
 });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") resume();
+  // Nothing's on screen, so the picture would be data for nothing.
+  else send({ t: "watching", on: false });
 });
 setInterval(() => {
   if (panelFor === "connection") panelDetail.textContent = attemptStatus();

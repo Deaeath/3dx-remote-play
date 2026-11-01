@@ -260,9 +260,9 @@ describe("the offer the PC answers", () => {
 
   it("starts high on every real codec, and never touches retransmission", () => {
     const tuned = tuneOffer(offer);
-    expect(tuned).toContain("a=fmtp:102 packetization-mode=1;profile-level-id=42e01f;x-google-start-bitrate=2500\r\n");
-    expect(tuned).toContain("a=rtpmap:96 VP8/90000\r\na=fmtp:96 x-google-start-bitrate=2500\r\n");
-    expect(tuned).toContain("a=rtpmap:45 AV1/90000\r\na=fmtp:45 x-google-start-bitrate=2500\r\n");
+    expect(tuned).toContain("a=fmtp:102 packetization-mode=1;profile-level-id=42e01f;x-google-start-bitrate=1200\r\n");
+    expect(tuned).toContain("a=rtpmap:96 VP8/90000\r\na=fmtp:96 x-google-start-bitrate=1200\r\n");
+    expect(tuned).toContain("a=rtpmap:45 AV1/90000\r\na=fmtp:45 x-google-start-bitrate=1200\r\n");
     expect(tuned).not.toContain("a=fmtp:97 apt=96;x-google");
   });
 
@@ -1039,5 +1039,47 @@ describe("hiding the game on the PC", () => {
     channel.onmessage?.({ data: '{"t":"minimize"}' });
     await flush();
     expect(setup.deps.minimizeGame).not.toHaveBeenCalled();
+  });
+});
+
+describe("using less data", () => {
+  async function livePhone() {
+    const pairing = pairingWith();
+    const setup = harness(pairing);
+    const socket = await online(setup);
+    const channel = await connectPhone(setup, socket, linkCredential(pairing));
+    await vi.waitFor(() => expect(setup.peers.at(-1)?.video.sender.setParameters).toHaveBeenCalled(), WAIT);
+    return { setup, channel, sender: setup.peers.at(-1)?.video.sender };
+  }
+
+  const lastSent = (sender: { setParameters: { mock: { calls: unknown[][] } } } | undefined) =>
+    (sender?.setParameters.mock.calls.at(-1)?.[0] as { encodings: RTCRtpEncodingParameters[] }).encodings[0];
+
+  it("starts on the balanced picture", async () => {
+    const { sender } = await livePhone();
+    expect(lastSent(sender)).toMatchObject({ maxBitrate: 1_500_000, maxFramerate: 30, active: true });
+  });
+
+  it("changes when the phone asks", async () => {
+    const { channel, sender } = await livePhone();
+    channel.onmessage?.({ data: '{"t":"quality","quality":"low"}' });
+    await vi.waitFor(() => expect(lastSent(sender)).toMatchObject({ maxBitrate: 700_000, maxFramerate: 24 }), WAIT);
+    channel.onmessage?.({ data: '{"t":"quality","quality":"high"}' });
+    await vi.waitFor(() => expect(lastSent(sender)).toMatchObject({ maxBitrate: 4_000_000 }), WAIT);
+  });
+
+  it("ignores a picture setting that doesn't exist", async () => {
+    const { channel, sender } = await livePhone();
+    channel.onmessage?.({ data: '{"t":"quality","quality":"ultra"}' });
+    await flush();
+    expect(lastSent(sender)).toMatchObject({ maxBitrate: 1_500_000 });
+  });
+
+  it("sends no picture while the phone isn't looking, and picks up again", async () => {
+    const { channel, sender } = await livePhone();
+    channel.onmessage?.({ data: '{"t":"watching","on":false}' });
+    await vi.waitFor(() => expect(lastSent(sender)).toMatchObject({ active: false }), WAIT);
+    channel.onmessage?.({ data: '{"t":"watching","on":true}' });
+    await vi.waitFor(() => expect(lastSent(sender)).toMatchObject({ active: true }), WAIT);
   });
 });

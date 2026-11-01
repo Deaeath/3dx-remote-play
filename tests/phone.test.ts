@@ -517,3 +517,42 @@ describe("the phone page hiding the game", () => {
     expect(document.getElementById("panel")?.hidden).toBe(true);
   });
 });
+
+describe("the phone page saving data", () => {
+  async function livePeer() {
+    const { socket, offer, peer } = await startedAndOffered();
+    await answer(socket, offer.at);
+    await vi.waitFor(() => expect(peer.remote).toHaveLength(1));
+    peer.channel.readyState = "open";
+    peer.channel.onopen?.();
+    return peer;
+  }
+
+  const picker = () => document.getElementById("quality") as HTMLSelectElement;
+  const sent = (peer: FakePeer) => peer.channel.sent.map((text) => JSON.parse(text) as { t: string });
+
+  it("asks for the picture it has saved as soon as it's let in", async () => {
+    const peer = await livePeer();
+    peer.channel.onmessage?.({ data: JSON.stringify({ t: "resume", token: "t" }) });
+    expect(sent(peer)).toContainEqual({ t: "quality", quality: picker().value });
+  });
+
+  it("changes the picture when picked, and remembers it", async () => {
+    const peer = await livePeer();
+    picker().value = "low";
+    picker().dispatchEvent(new Event("change"));
+    expect(sent(peer).at(-1)).toEqual({ t: "quality", quality: "low" });
+    expect(localStorage.getItem("3dx-play:quality")).toBe("low");
+    picker().value = "medium";
+    picker().dispatchEvent(new Event("change"));
+  });
+
+  it("tells the PC to stop the picture while the phone is put away, and to send it again after", async () => {
+    const peer = await livePeer();
+    peer.connectionState = "connected";
+    setVisibility("hidden");
+    expect(sent(peer).at(-1)).toEqual({ t: "watching", on: false });
+    setVisibility("visible");
+    expect(sent(peer).at(-1)).toEqual({ t: "watching", on: true });
+  });
+});

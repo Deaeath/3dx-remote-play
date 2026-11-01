@@ -18,6 +18,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import {
   PLAY_ORIGIN,
+  PLAY_QUALITIES,
   REMOTE_PLAY_INPUTS,
   createRoom,
   createSecret,
@@ -34,6 +35,7 @@ import {
   type PlayCredential,
   type PlayState,
   type SignalMessage,
+  type PlayQuality,
 } from "../shared/remotePlay";
 import { verifyProof, verifyRegistration, type PairedPasskey, type PasskeyRegistration } from "../shared/passkey";
 
@@ -51,9 +53,14 @@ const ICE_CONFIG_WAIT_MS = 4000;
 const FIRST_VIDEO_LOG_MS = 5000;
 const VIDEO_LOG_EVERY_MS = 30_000;
 const MAX_REPORT_LENGTH = 300;
-/** A good 1080p picture without eating a phone's data plan: about 2 GB an hour. */
-const MAX_VIDEO_BITRATE = 5_000_000;
-const START_VIDEO_KBPS = 2500;
+/** At most, an hour takes about 0.3, 0.7 and 1.8 GB. Less when the picture is still. */
+const VIDEO_QUALITIES: Record<PlayQuality, { height: number; frameRate: number; bitrate: number }> = {
+  low: { height: 480, frameRate: 24, bitrate: 700_000 },
+  medium: { height: 720, frameRate: 30, bitrate: 1_500_000 },
+  high: { height: 1080, frameRate: 30, bitrate: 4_000_000 },
+};
+const DEFAULT_QUALITY: PlayQuality = "medium";
+const START_VIDEO_KBPS = 1200;
 /** How long a phone gets to sign a nonce. */
 const NONCE_LIFETIME_MS = 5 * 60_000;
 /** How long after a dropped connection a phone may come back without the passkey. */
@@ -67,7 +74,7 @@ const AUTO_HIDE_AFTER_MS = 60_000;
 const AUTO_HIDE_SLACK_MS = 1000;
 const CRLF = "\r\n";
 const VIDEO_CODECS = ["H264", "VP8", "VP9", "AV1"];
-const MAX_FRAME_RATE = 60;
+const MAX_FRAME_RATE = 30;
 const AUDIO_SAMPLE_RATE = 48_000;
 const AUDIO_CHANNELS = 2;
 const STUN = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
@@ -240,6 +247,9 @@ interface Session {
   /** False until a phone on a pairing link has made its passkey: no picture, no input. */
   authed: boolean;
   channelOpened: boolean;
+  quality: PlayQuality;
+  /** False while the phone is locked or in another app: no picture, no data. */
+  watching: boolean;
   stream: MediaStream | null;
   stopAudio: (() => void) | null;
   /** The new room and secret sent to the phone, kept until it confirms saving them. */
@@ -526,6 +536,8 @@ export class RemotePlayHost {
       live: false,
       authed: !viaLink,
       channelOpened: false,
+      quality: DEFAULT_QUALITY,
+      watching: true,
       stream: null,
       stopAudio: null,
       pending: null,
@@ -720,12 +732,7 @@ export class RemotePlayHost {
       const [track] = stream.getVideoTracks();
       track.contentHint = "motion";
       await session.video.sender.replaceTrack(track);
-      const parameters = session.video.sender.getParameters();
-      for (const encoding of parameters.encodings ?? []) {
-        encoding.maxBitrate = MAX_VIDEO_BITRATE;
-        encoding.maxFramerate = MAX_FRAME_RATE;
-      }
-      await session.video.sender.setParameters(parameters).catch(() => undefined);
+      await this.applyVideoSettings(session);
       if (this.session !== session) return;
       const stopAudio = await this.deps.startAudio(session.audio.sender).catch((error: unknown) => {
         this.deps.log(`sound: couldn't start: ${String(error)}`);
@@ -742,6 +749,21 @@ export class RemotePlayHost {
     }
   }
 
+  private async applyVideoSettings(session: Session): Promise<void> {
+    const track = session.stream?.getVideoTracks()[0];
+    if (!track) return;
+    const { height, frameRate, bitrate } = VIDEO_QUALITIES[session.quality];
+    const captured = track.getSettings?.().height ?? height;
+    const parameters = session.video.sender.getParameters();
+    for (const encoding of parameters.encodings ?? []) {
+      encoding.active = session.watching;
+      encoding.maxBitrate = bitrate;
+      encoding.maxFramerate = frameRate;
+      encoding.scaleResolutionDownBy = Math.max(1, captured / height);
+    }
+    await session.video.sender.setParameters(parameters).catch(() => undefined);
+  }
+
   private async onCommand(session: Session, text: string): Promise<void> {
     if (this.session !== session) return;
     const command = parseCommand(text);
@@ -752,6 +774,13 @@ export class RemotePlayHost {
     } else if (command.t === "focus") {
       await this.deps.focusGame().catch(() => undefined);
       await this.refreshGame(session);
+    } else if (command.t === "quality") {
+      if (!PLAY_QUALITIES.includes(command.quality)) return;
+      session.quality = command.quality;
+      await this.applyVideoSettings(session);
+    } else if (command.t === "watching") {
+      session.watching = command.on === true;
+      await this.applyVideoSettings(session);
     } else if (command.t === "minimize") {
       await this.deps.minimizeGame().catch(() => undefined);
       await this.refreshGame(session);
