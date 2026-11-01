@@ -47,7 +47,7 @@ Next time, just open the page you saved. It works on Wi-Fi and on mobile data, w
 - **Only the game.** Your phone sees the 3DXChat window and hears the game's sound. Nothing else on your PC.
 - **Only game controls.** A phone can click inside the game, chat, and press Esc and the camera keys. No Windows key, no Alt+Tab, nothing outside the game.
 - **One phone.** A pairing link works once, for 15 minutes. The first phone to open it gets a key of its own, and the link stops working.
-- **Encrypted end to end.** Picture, sound and controls go straight between your PC and your phone. The small relay that introduces them only ever sees sealed messages.
+- **Encrypted end to end.** Picture, sound and controls are encrypted between your PC and your phone. They go straight between the two when they can, and through a Cloudflare relay when they can't. Cloudflare only ever sees sealed data.
 - **You'll know.** Your PC shows a notification whenever a phone connects.
 
 ## 💡 Good to know
@@ -55,7 +55,7 @@ Next time, just open the page you saved. It works on Wi-Fi and on mobile data, w
 - Keep the PC on, signed in and unlocked. While Remote Play is on, the PC won't go to sleep.
 - 3DXChat has to be open, or start it from your phone once it has run on this PC.
 - Closing the window keeps Remote Play running in the tray. **Open with Windows** makes the PC ready again after a restart.
-- A VPN on the PC can stop your phone from reaching it. If your phone stays on **Connecting**, that's the first thing to try turning off.
+- It works with a VPN on, on your PC or your phone.
 - If your phone won't connect, the page shows which step it's on, and the app writes what happened to `remote_play.log` in `%APPDATA%\com.kingcolossus.remoteplay`. It holds no addresses or keys, and it stays on your PC.
 - Windows may say the app is from an unknown publisher: click **More info**, then **Run anyway**.
 
@@ -75,7 +75,7 @@ npm run tauri build     # the installer
 npm run deploy:phone    # the phone page and the relay
 ```
 
-**TURN.** Some mobile carriers and VPNs block direct connections. Create a TURN key under Realtime in the Cloudflare dashboard, then set it on the Pages project:
+**TURN.** Some mobile carriers and VPNs block direct connections, so a copy of the page needs its own relay. Create a TURN key (not an SFU app) under Realtime in the Cloudflare dashboard, then set it on the Pages project:
 
 ```powershell
 npx wrangler pages secret put TURN_KEY_ID --project-name 3dx-play

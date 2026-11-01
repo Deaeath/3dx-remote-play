@@ -1,7 +1,7 @@
 // remote-play/functions/ice.ts
 //
 // The servers WebRTC uses to find a way between PC and phone. STUN alone
-// connects most networks. Some mobile carriers need a TURN relay as well: set
+// connects most networks. Some mobile carriers and VPNs need a TURN relay: set
 // the TURN_KEY_ID and TURN_KEY_TOKEN secrets on the Pages project and short-lived
 // Cloudflare TURN credentials are handed out here. Media stays encrypted end to
 // end either way.

@@ -43,7 +43,7 @@ const REPORT_EVERY_TICKS = 15;
 const STUCK = {
   relay: "This phone can't reach the internet right now. Still trying.",
   answer: "Your PC isn't answering. Check that 3DX Remote Play is running on it. Still trying.",
-  path: "Your phone and PC can't reach each other on this network. A VPN on the PC is a common cause. Still trying.",
+  path: "Your phone and PC can't reach each other right now. Still trying.",
   page: "Something went wrong on this phone. Still trying.",
 };
 const MAGNIFIED = 2;
