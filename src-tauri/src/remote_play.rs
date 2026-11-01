@@ -666,6 +666,16 @@ mod tests {
     }
 
     #[test]
+    fn starting_in_the_tray_leaves_the_focus_where_it_was() {
+        // The window starts hidden, and by default it would still take the focus
+        // from whatever is in front, like the game, and swallow what's typed.
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let window = &config["app"]["windows"][0];
+        assert_eq!(window["visible"], false);
+        assert_eq!(window["focus"], false);
+    }
+
+    #[test]
     fn only_the_game_executable_can_be_launched() {
         let dir = tempfile::tempdir().unwrap();
         let game = dir.path().join("3DXChat.exe");

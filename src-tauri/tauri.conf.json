@@ -21,6 +21,7 @@
         "maximizable": false,
         "center": true,
         "visible": false,
+        "focus": false,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --auto-select-desktop-capture-source=3dx-remote-play-capture"
       }
     ],
