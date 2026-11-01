@@ -169,9 +169,7 @@ pub fn remote_play_game_state(app: AppHandle, state: State<'_, RemotePlayState>)
 }
 
 /// For anything that waits on another app's window. On the main thread that
-/// wait would hold up every other command and the app's own window too, and
-/// sharing input with the window in front (`bring_to_front`) would tie that
-/// window to the webview's.
+/// wait would hold up every other command and the app's own window too.
 async fn off_main_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(work).await.map_err(|error| error.to_string())
 }
@@ -395,14 +393,14 @@ mod win {
     use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED};
     use windows_sys::Win32::System::StationsAndDesktops::{CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, DESKTOP_READOBJECTS, UOI_NAME};
     use windows_sys::Win32::System::SystemInformation::GetTickCount;
-    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::System::Threading::{AttachThreadInput};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         GetLastInputInfo, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, LASTINPUTINFO, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE,
         MAPVK_VK_TO_VSC, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
         MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, VK_MENU,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, GetAncestor, GetClientRect, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId,
+        GetAncestor, GetClientRect, GetCursorPos, GetForegroundWindow, GetSystemMetrics, 
         IsHungAppWindow, IsIconic, IsWindow, SendMessageTimeoutW, SetForegroundWindow, ShowWindow, ShowWindowAsync, WindowFromPoint, GA_ROOT,
         SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_MINIMIZE, SW_RESTORE, WM_SETTEXT,
     };
@@ -587,8 +585,9 @@ mod win {
         unsafe { IsWindow(hwnd(handle)) != 0 }
     }
 
-    /// Windows lets only the app in front hand over the focus, so this briefly
-    /// shares input with it, and falls back on a tap of Alt, which counts as use.
+    /// Windows lets only the app in front hand over the focus, so if asking isn't
+    /// enough, a tap of Alt counts as use. Never AttachThreadInput here: with this
+    /// app's own window in front, that ties into WebView2's threads and deadlocks them.
     pub fn bring_to_front(handle: isize) -> bool {
         let window = hwnd(handle);
         unsafe {
@@ -598,12 +597,7 @@ mod win {
             if GetForegroundWindow() == window {
                 return true;
             }
-            let front_thread = GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut());
-            let own_thread = GetCurrentThreadId();
-            AttachThreadInput(own_thread, front_thread, 1);
-            BringWindowToTop(window);
             SetForegroundWindow(window);
-            AttachThreadInput(own_thread, front_thread, 0);
             if GetForegroundWindow() == window {
                 return true;
             }
@@ -771,6 +765,13 @@ mod tests {
         let window = &config["app"]["windows"][0];
         assert_eq!(window["visible"], false);
         assert_eq!(window["focus"], false);
+    }
+
+    #[test]
+    fn bringing_the_game_forward_shares_no_input() {
+        // It froze the app: Windows reported a deadlock inside WebView2.
+        let call = ["Attach", "ThreadInput("].concat();
+        assert!(!include_str!("remote_play.rs").contains(&call));
     }
 
     #[test]
