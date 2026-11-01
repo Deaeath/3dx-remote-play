@@ -183,6 +183,12 @@ beforeAll(async () => {
 
 beforeEach(() => backToStart());
 
+describe("the phone page", () => {
+  it("shows its version", () => {
+    expect(document.getElementById("page-version")?.textContent).toBe("Version test");
+  });
+});
+
 describe("the phone page while connecting", () => {
   it("says where it's up to, without any address", async () => {
     const { socket, offer } = await startedAndOffered();

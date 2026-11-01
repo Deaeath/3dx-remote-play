@@ -335,6 +335,7 @@ body.chatting #actions {
   font-size: 15px;
 }
 
+#panel p#page-version,
 #panel p#panel-detail {
   color: rgba(255, 255, 255, 0.45);
   font-size: 12px;

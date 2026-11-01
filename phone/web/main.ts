@@ -77,6 +77,7 @@ const panel = element("panel");
 const panelTitle = element("panel-title");
 const panelText = element("panel-text");
 const panelDetail = element("panel-detail");
+element("page-version").textContent = `Version ${__PAGE_VERSION__}`;
 const panelAction = element<HTMLButtonElement>("panel-action");
 const panelLink = element("panel-link");
 

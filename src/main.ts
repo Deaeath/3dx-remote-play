@@ -210,6 +210,10 @@ autostartToggle.addEventListener("change", () => {
 showAutostart();
 render();
 getVersion()
+  .then((version) => {
+    element("version").textContent = `\u00b7 Version ${version}`;
+    return version;
+  })
   .then((version) => realHostDeps.log(`3DX Remote Play ${version} started on ${location.host}${typeof navigator.mediaDevices?.getDisplayMedia === "function" ? "" : ", can't capture"}`))
   .catch(() => undefined);
 void host.start().catch((error) => console.warn("[remote play] couldn't start:", error));
