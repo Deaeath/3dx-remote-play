@@ -126,6 +126,7 @@ pub struct GameState {
     front: bool,
     locked: bool,
     can_launch: bool,
+    window: Option<String>,
 }
 
 fn config_file(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
@@ -170,6 +171,7 @@ pub fn remote_play_game_state(app: AppHandle, state: State<'_, RemotePlayState>)
         front: game_window::is_in_front(),
         locked: win::session_locked(),
         can_launch: known_game_path(&app, &state).is_some(),
+        window: game.as_ref().map(|game| game.handle.to_string()),
     }
 }
 

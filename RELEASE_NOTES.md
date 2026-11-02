@@ -1,7 +1,7 @@
-Fixes the freeze:
+Stop sharing works:
 
-- The app could freeze when a phone connected while the app's window was open. Its windows now stay out of the way of the screen capture, which was the cause.
-- If it ever freezes anyway, it still restarts itself in the tray.
+- Stop sharing on the bar at the bottom of the PC's screen now ends the session, the same as End in the app. Before, the app picked the game up again a moment later and the bar came back.
+- After that the phone has to unlock again, with Face ID, a fingerprint or its passcode, to reconnect.
 
 3DX Remote Play plays 3DXChat on your phone, from anywhere:
 

@@ -94,7 +94,7 @@ class FakeSocket {
 }
 
 function fakeStream() {
-  const track = { kind: "video", readyState: "live", contentHint: "", stop: vi.fn() };
+  const track = { kind: "video", label: "window:4242:0", readyState: "live", contentHint: "", stop: vi.fn() };
   return {
     track,
     stream: { getVideoTracks: () => [track], getTracks: () => [track] } as unknown as MediaStream,
@@ -493,6 +493,34 @@ describe("Remote Play host", () => {
     expect(setup.host.snapshot().session).toBeNull();
   });
 
+  it("ends the session when Stop sharing is pressed on the PC, and doesn't capture again", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing, { window: "4242" });
+    const socket = await online(setup);
+    const channel = await connectPhone(setup, socket, linkCredential(pairing));
+    await vi.waitFor(() => expect(setup.deps.captureGame).toHaveBeenCalledTimes(1), WAIT);
+    setup.captured.track.readyState = "ended";
+    channel.onmessage?.({ data: '{"t":"focus"}' });
+    await flush();
+    expect(setup.host.snapshot().session).toBeNull();
+    expect(setup.peers[0].closed).toBe(true);
+    expect(setup.deps.captureGame).toHaveBeenCalledTimes(1);
+    expect(setup.deps.log).toHaveBeenCalledWith(expect.stringContaining("sharing was stopped on this PC"));
+  });
+
+  it("captures again when the game's window was replaced", async () => {
+    const pairing = pairingWith();
+    const setup = harness(pairing, { window: "4242" });
+    const socket = await online(setup);
+    const channel = await connectPhone(setup, socket, linkCredential(pairing));
+    await vi.waitFor(() => expect(setup.deps.captureGame).toHaveBeenCalledTimes(1), WAIT);
+    setup.captured.track.readyState = "ended";
+    setup.native.window = "5151";
+    channel.onmessage?.({ data: '{"t":"focus"}' });
+    await vi.waitFor(() => expect(setup.deps.captureGame).toHaveBeenCalledTimes(2), WAIT);
+    expect(setup.host.snapshot().session).not.toBeNull();
+  });
+
   it("lets go of anything held once the game leaves the front", async () => {
     const pairing = pairingWith();
     const setup = harness(pairing, { front: false });
@@ -871,6 +899,18 @@ describe("a paired phone proving it's the owner", () => {
   it("wants the passkey again after the session is ended on the PC", async () => {
     const { setup, socket, credential, token } = await livePhone();
     setup.host.endSession();
+    await sendOffer(socket, credential, { resume: token });
+    expect(setup.peers).toHaveLength(1);
+  });
+
+  it("wants the passkey again after Stop sharing is pressed on the PC", async () => {
+    const { setup, socket, credential, channel, token } = await livePhone();
+    setup.native.window = "4242";
+    await vi.waitFor(() => expect(setup.deps.captureGame).toHaveBeenCalledTimes(1), WAIT);
+    setup.captured.track.readyState = "ended";
+    channel.onmessage?.({ data: '{"t":"focus"}' });
+    await flush();
+    expect(setup.host.snapshot().session).toBeNull();
     await sendOffer(socket, credential, { resume: token });
     expect(setup.peers).toHaveLength(1);
   });

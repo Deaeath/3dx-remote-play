@@ -68,6 +68,8 @@ const RESUME_LIFETIME_MS = 10 * 60_000;
 /** Turning on and then showing the code shouldn't ask twice. */
 const OWNER_CHECK_LASTS_MS = 2 * 60_000;
 const ENDED_ON_THIS_PC = "ended on this PC";
+/** The sharing bar's Stop sharing button, which counts the same as End. */
+const STOPPED_ON_THIS_PC = "sharing was stopped on this PC";
 /** How long after a phone leaves, with nobody at the PC, the game gets hidden. */
 const AUTO_HIDE_AFTER_MS = 60_000;
 /** Timers and Windows' idle clock don't tick quite together. */
@@ -102,6 +104,8 @@ export interface NativeGameState {
   front: boolean;
   locked: boolean;
   canLaunch: boolean;
+  /** The game window's handle, as a capture of it is labelled. */
+  window?: string | null;
 }
 
 /** Everything the host needs from outside; tests replace it. */
@@ -381,7 +385,8 @@ export class RemotePlayHost {
     if (!session) return;
     this.session = null;
     // Coming back after a dropped network shouldn't ask again; being ended here should.
-    if (this.resume) this.resume = reason === ENDED_ON_THIS_PC ? null : { ...this.resume, expiresAt: Date.now() + RESUME_LIFETIME_MS };
+    const endedHere = reason === ENDED_ON_THIS_PC || reason === STOPPED_ON_THIS_PC;
+    if (this.resume) this.resume = endedHere ? null : { ...this.resume, expiresAt: Date.now() + RESUME_LIFETIME_MS };
     this.deps.log(`session over after ${Math.round((Date.now() - session.openedAt) / 1000)} s: ${reason}`);
     if (session.poll !== null) clearInterval(session.poll);
     session.stopAudio?.();
@@ -678,6 +683,12 @@ export class RemotePlayHost {
 
     const track = session.stream?.getVideoTracks()[0];
     if (track?.readyState === "ended") {
+      // The game's window is still there, so it was the sharing bar's Stop sharing.
+      // Capturing again would put the bar straight back.
+      if (native.window && track.label === `window:${native.window}:0`) {
+        this.endSession(STOPPED_ON_THIS_PC);
+        return;
+      }
       this.deps.log("capture: the picture stopped");
       this.dropCapture(session);
     }
